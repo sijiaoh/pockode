@@ -113,3 +113,60 @@ func readIndexFile(dataDir string) (indexData, error) {
 	migrateIndex(&idx)
 	return idx, nil
 }
+
+// HistoryVersion is which version of a session's history file a read found:
+// the file itself, its size and when it was last written. A history only
+// changes by an append, which grows it, or by a whole-file write renamed into
+// place, which makes it another file (see FileStore.GetHistory) — so two
+// versions that are Same name the same contents.
+//
+// It is what lets something that keeps a copy of a history it is told of no
+// writes to (projection.Folds) know whether the copy still holds, at the cost
+// of one stat instead of a read.
+type HistoryVersion struct {
+	path string
+	info fs.FileInfo
+}
+
+// HistoryVersion is the version of the session's history file as of now. Take
+// it before reading the history: a write between the two then leaves a copy
+// that is newer than its version says, which is read again, never one that is
+// older.
+func (r DirReader) HistoryVersion(sessionID string) (HistoryVersion, error) {
+	path := historyPath(r.dataDir, sessionID)
+	info, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return HistoryVersion{path: path}, nil
+	}
+	if err != nil {
+		return HistoryVersion{}, fmt.Errorf("stat session history: %w", err)
+	}
+	// On Windows, Stat of a regular file does not read the file's identity:
+	// SameFile fetches it from the path when first asked, which for a version
+	// compared later would be the file there *then* — every version of the
+	// history would be the same file. Asking now fixes it to this one. Where
+	// it cannot be read (the file renamed over meanwhile), the version is left
+	// without one, which is Same as nothing: the history is read again rather
+	// than a later ask reading the identity of whatever file is there then.
+	if !os.SameFile(info, info) {
+		return HistoryVersion{path: path}, nil
+	}
+	return HistoryVersion{path: path, info: info}, nil
+}
+
+// File is the history file the version is of: one key per history, however
+// many readers there are over its directory.
+func (v HistoryVersion) File() string { return v.path }
+
+// Same reports whether v and w are one version of one file. A version of a
+// history that has no file, or whose file's identity could not be read, is
+// the same as nothing: nothing kept can be told to still hold.
+func (v HistoryVersion) Same(w HistoryVersion) bool {
+	if v.info == nil || w.info == nil {
+		return false
+	}
+	return v.path == w.path &&
+		v.info.Size() == w.info.Size() &&
+		v.info.ModTime().Equal(w.info.ModTime()) &&
+		os.SameFile(v.info, w.info)
+}

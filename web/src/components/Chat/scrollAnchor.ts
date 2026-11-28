@@ -267,8 +267,8 @@ export function holdingAnchor(
  * sat in the transcript.
  *
  * A page only ever adds content above that edge — rows before the first one, or
- * the older half of its turn spliced into it from the top (`prependHistoryPage`
- * keeps the row's identity, so it is the same node). The rows sit on the
+ * the older half of its turn added into it from the top (a turn's first bubble
+ * is keyed by its turn, so it is the same node). The rows sit on the
  * bottom edge of their track, so nothing added above the edge moves it: what
  * does, in the commit a page lands in, is output landing at the end, which
  * carries the reader by as much wherever they are reading. How far the edge

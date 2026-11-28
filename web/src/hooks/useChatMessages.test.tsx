@@ -5,13 +5,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SentMessage } from "../lib/rpc";
 import type { SentHtmlAction } from "../lib/rpc/chat";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
+import {
+	changedTool,
+	ended,
+	msg,
+	noTurn,
+	page,
+	resetItems,
+	text,
+	thinking,
+	tool,
+	turn,
+	update,
+} from "../test/chatItemsFixture";
 import { makeSessionDetail } from "../test/sessionFixtures";
+import type { ChatPage, PageTurn } from "../types/chatItems";
 import type {
 	AssistantMessage,
 	ChatNotification,
 	Message,
 	QuestionAnswerRecord,
-	ServerNotification,
 	SessionDetail,
 	UserMessage,
 } from "../types/message";
@@ -71,9 +84,26 @@ function setDetailTurn(sessionId: string, turn: SessionDetail["turn"]) {
 		.setDetail(sessionId, makeSessionDetail({ id: sessionId, turn }));
 }
 
-const history = (text: string): ServerNotification[] => [
-	{ type: "text", content: text } as ServerNotification,
-];
+const IDLE = { phase: "idle", open: false, since: "" } as const;
+const RUNNING_TURN = { phase: "running", open: true, since: "" } as const;
+
+/** A subscription whose snapshot is `p`, handing the test its callback. */
+function subscribeWith(
+	p: () => ChatPage,
+	rest: Record<string, unknown> = {},
+): { notify: (n: ChatNotification) => void } {
+	const handle = { notify: (_n: ChatNotification) => {} };
+	mockState.chatMessagesSubscribe.mockImplementation(
+		async (
+			_sessionId: string,
+			onNotification: (n: ChatNotification) => void,
+		) => {
+			handle.notify = onNotification;
+			return { id: "sub-1", initial: { ...p(), turn: IDLE, ...rest } };
+		},
+	);
+	return handle;
+}
 
 // Records every *committed* state, so a session id paired with the previous
 // session's messages is caught even though the pairing lasts a single frame.
@@ -146,12 +176,13 @@ describe("useChatMessages", () => {
 		mockState.invalidateCommandCache.mockClear();
 		mockState.chatMessagesHistory.mockReset();
 		useSessionDetailStore.getState().clear();
+		resetItems();
 		mockState.chatMessagesSubscribe.mockImplementation(
 			async (sessionId: string) => ({
 				id: `sub-${sessionId}`,
 				initial: {
-					history: history(`message of ${sessionId}`),
-					turn: { phase: "idle", open: false, since: "" },
+					...page([turn({}, msg(`message of ${sessionId}`), text("ok"))]),
+					turn: IDLE,
 				},
 			}),
 		);
@@ -182,23 +213,14 @@ describe("useChatMessages", () => {
 		});
 	});
 
-	// Sending locally is its own entry point — it appends straight to the list
-	// rather than going through applyServerEvent — so the rule that an unanswered
-	// placeholder is not left behind has to hold here too, or the plain user path
-	// would keep the blank bubbles the system-message path no longer has.
+	// A session whose process died right after the message was persisted: its
+	// turn never started, and nothing is on its way to answer it. Sending again
+	// must not leave a blank reply behind under the first.
 	it("leaves no blank bubble behind when the previous turn was never answered", async () => {
-		// A session whose process died right after the message was persisted: the
-		// transcript ends on a placeholder the agent never wrote into.
-		mockState.chatMessagesSubscribe.mockImplementation(async () => ({
-			id: "sub-1",
-			initial: {
-				history: [{ type: "message", content: "Anyone there?" }],
-				turn: { phase: "idle", open: false, since: "" },
-			},
-		}));
+		subscribeWith(() => page([noTurn(msg("Anyone there?"))]));
 
 		const { latest, send } = renderSendProbe();
-		await waitFor(() => expect(latest.messages).toHaveLength(2));
+		await waitFor(() => expect(latest.messages).toHaveLength(1));
 
 		await act(async () => {
 			await send.current("Still there?");
@@ -490,29 +512,17 @@ describe("useChatMessages", () => {
 
 	// A Task subagent keeps talking for a moment after the user stops the turn.
 	// `turnOpen` is what blocks the composer and shows the Stop button, and it
-	// reads the session's turn rather than the last bubble's status — so a late
-	// message cannot revive it, and a stopped session cannot look like a running
-	// one. The old bookkeeping inferred liveness from the transcript, which is
-	// exactly what this case broke.
+	// reads the session's turn rather than the last bubble's status — so late
+	// output cannot revive it, and a stopped session cannot look like a running
+	// one.
 	it("follows the session's turn, not the last message", async () => {
-		let notify: ((notification: ServerNotification) => void) | undefined;
-		mockState.chatMessagesSubscribe.mockImplementation(
-			async (
-				_sessionId: string,
-				onNotification: (notification: ServerNotification) => void,
-			) => {
-				notify = onNotification;
-				return {
-					id: "sub-1",
-					initial: {
-						history: [
-							{ type: "message", content: "Do the thing" },
-							{ type: "text", content: "Working" },
-						],
-						turn: { phase: "running", open: true, since: "" },
-					},
-				};
+		let t: PageTurn | undefined;
+		const sub = subscribeWith(
+			() => {
+				t = turn({ ended: false }, msg("Do the thing"), text("Working"));
+				return page([t]);
 			},
+			{ turn: RUNNING_TURN },
 		);
 
 		let open = false;
@@ -522,43 +532,119 @@ describe("useChatMessages", () => {
 			return null;
 		}
 
-		setDetailTurn("s1", { phase: "running", open: true, since: "" });
+		setDetailTurn("s1", RUNNING_TURN);
 		render(<StreamProbe />);
 		await waitFor(() => expect(open).toBe(true));
 
 		// The turn ends where it really ends: in the session's state.
-		act(() => setDetailTurn("s1", { phase: "idle", open: false, since: "" }));
+		act(() => setDetailTurn("s1", IDLE));
 		expect(open).toBe(false);
 
 		act(() =>
-			notify?.({
-				type: "text",
-				content: "Task finished",
-			} as ServerNotification),
+			sub.notify(
+				update({ items: [text("Task finished")], turnId: t?.turn?.turn_id }),
+			),
 		);
 		expect(open).toBe(false);
 	});
 
 	// The window this subscription cannot afford to have: the server registers
-	// the subscription before it reads the history, and writes the reply and any
-	// notification from different goroutines. A record written in between is not
-	// in the history that comes back and can arrive before it — applied straight
-	// away it would be wiped out by the older snapshot landing after it, and the
-	// message would be gone from the transcript with nothing left to say so.
-	it("keeps a message that arrives before the history does", async () => {
+	// the subscription before it cuts the page, and writes the reply and any
+	// notification from different goroutines. An update sent in between can
+	// arrive before the reply — applied straight away it would be wiped out by
+	// the snapshot landing after it.
+	it("keeps an update that arrives before the page does", async () => {
 		mockState.chatMessagesSubscribe.mockImplementation(
 			async (
 				_sessionId: string,
-				onNotification: (notification: ServerNotification) => void,
+				onNotification: (notification: ChatNotification) => void,
 			) => {
-				onNotification({ type: "text", content: "written meanwhile" });
-				return {
-					id: "sub-1",
-					initial: {
-						history: [{ type: "message", content: "Do the thing" }],
-						turn: { phase: "running", open: true, since: "" },
+				const t = turn({ ended: false }, msg("Do the thing"));
+				const snapshot = page([t]);
+				onNotification(
+					update({
+						items: [text("written meanwhile")],
+						turnId: t.turn?.turn_id,
+					}),
+				);
+				return { id: "sub-1", initial: { ...snapshot, turn: RUNNING_TURN } };
+			},
+		);
+
+		let messages: Message[] = [];
+		function Probe() {
+			messages = useChatMessages({ sessionId: "s1" }).messages;
+			return null;
+		}
+		render(<Probe />);
+
+		await waitFor(() =>
+			expect(messages.at(-1)).toMatchObject({
+				role: "assistant",
+				parts: [{ type: "text", content: "written meanwhile" }],
+			}),
+		);
+		expect(messages[0]).toMatchObject({
+			role: "user",
+			content: "Do the thing",
+		});
+	});
+
+	// The same window seen from the other side: an update for a record written
+	// before the page was cut is already in the page. Applied again it would
+	// put a second copy of what it added in the transcript.
+	it("does not apply an update the page already holds", async () => {
+		mockState.chatMessagesSubscribe.mockImplementation(
+			async (
+				_sessionId: string,
+				onNotification: (notification: ChatNotification) => void,
+			) => {
+				const t = turn({ ended: false }, msg("Do the thing"), text("once"));
+				const held = update({ items: [t.items[1]], turnId: t.turn?.turn_id });
+				const snapshot = page([t]);
+				onNotification(held);
+				return { id: "sub-1", initial: { ...snapshot, turn: RUNNING_TURN } };
+			},
+		);
+
+		let messages: Message[] = [];
+		function Probe() {
+			messages = useChatMessages({ sessionId: "s1" }).messages;
+			return null;
+		}
+		render(<Probe />);
+
+		await waitFor(() => expect(messages).toHaveLength(2));
+		expect(messages[1]).toMatchObject({
+			role: "assistant",
+			parts: [{ type: "text", content: "once" }],
+		});
+	});
+
+	// A phone reconnects mid-run as a matter of course, and what a call says
+	// about itself is never recorded — so what a background call that started
+	// half an hour ago is doing reaches a fresh subscription only in the reply.
+	it("picks up what a call still in flight last reported", async () => {
+		let call = tool("Bash");
+		subscribeWith(
+			() => {
+				const asked = msg("Build it");
+				call = tool(
+					"Bash",
+					{ command: "npm run build" },
+					{
+						tool_use_id: "t1",
+						status: "background",
+						backgrounded: true,
 					},
-				};
+				);
+				return page([turn({ ended: false }, asked, call)]);
+			},
+			{
+				turn: RUNNING_TURN,
+				streams: {
+					tools: { t1: { activity: "Compiling 120 modules" } },
+				},
 			},
 		);
 
@@ -570,84 +656,30 @@ describe("useChatMessages", () => {
 		render(<Probe />);
 
 		await waitFor(() => expect(messages.length).toBeGreaterThan(1));
-		expect(messages[0]).toMatchObject({
-			role: "user",
-			content: "Do the thing",
-		});
-		expect(messages.at(-1)).toMatchObject({
-			role: "assistant",
-			parts: [{ type: "text", content: "written meanwhile" }],
-		});
-	});
-
-	// A phone reconnects mid-run as a matter of course, and `tool_activity` is
-	// never recorded — so what a background call that started half an hour ago is
-	// doing reaches a fresh subscription only in the reply.
-	it("picks up what a call still in flight last reported", async () => {
-		mockState.chatMessagesSubscribe.mockImplementation(async () => ({
-			id: "sub-1",
-			initial: {
-				history: [
-					{ type: "message", content: "Build it" },
-					{
-						type: "tool_call",
-						tool_name: "Bash",
-						tool_input: { command: "npm run build" },
-						tool_use_id: "t1",
-					},
-					{
-						type: "tool_result",
-						tool_use_id: "t1",
-						tool_result: "Command running in background with ID: bash_1",
-						subtype: "background_started",
-					},
-				],
-				turn: { phase: "running", open: true, since: "" },
-				tool_activity: { t1: "Compiling 120 modules" },
-			},
-		}));
-
-		let messages: Message[] = [];
-		function Probe() {
-			messages = useChatMessages({ sessionId: "s1" }).messages;
-			return null;
-		}
-		render(<Probe />);
-
-		await waitFor(() => expect(messages.length).toBeGreaterThan(1));
-		const turn = messages.at(-1) as AssistantMessage;
-		expect(turn.parts[0]).toMatchObject({
+		const reply = messages.at(-1) as AssistantMessage;
+		expect(reply.parts[0]).toMatchObject({
 			type: "tool_call",
-			tool: { status: "background", activity: "Compiling 120 modules" },
+			tool: {
+				id: call.tool?.tool_use_id,
+				status: "background",
+				activity: "Compiling 120 modules",
+			},
 		});
 	});
 
 	// Progress can arrive faster than the screen refreshes, so it is held for
 	// one frame — and what the frame applies has to be all of it, in order.
-	it("applies progress that arrived within one frame in order", async () => {
-		let notify: (notification: ServerNotification) => void = () => {};
-		mockState.chatMessagesSubscribe.mockImplementation(
-			async (
-				_sessionId: string,
-				onNotification: (notification: ServerNotification) => void,
-			) => {
-				notify = onNotification;
-				return {
-					id: "sub-1",
-					initial: {
-						history: [
-							{ type: "message", content: "Build it" },
-							{
-								type: "tool_call",
-								tool_name: "Bash",
-								tool_input: { command: "npm run build" },
-								tool_use_id: "t1",
-							},
-						],
-						turn: { phase: "running", open: true, since: "" },
-					},
-				};
-			},
+	it("applies deltas that arrived within one frame in order", async () => {
+		const sub = subscribeWith(
+			() =>
+				page([
+					turn(
+						{ ended: false },
+						msg("Build it"),
+						tool("Bash", {}, { tool_use_id: "t1", status: "running" }),
+					),
+				]),
+			{ turn: RUNNING_TURN },
 		);
 
 		let messages: Message[] = [];
@@ -659,60 +691,40 @@ describe("useChatMessages", () => {
 		await waitFor(() => expect(messages.length).toBeGreaterThan(1));
 
 		act(() => {
-			notify({
-				type: "tool_activity",
-				tool_use_id: "t1",
-				output_delta: "one\n",
-				activity: "Compiling",
+			sub.notify({
+				type: "delta",
+				tool: { tool_use_id: "t1", output: "one\n", activity: "Compiling" },
 			});
-			notify({
-				type: "tool_activity",
-				tool_use_id: "t1",
-				output_delta: "two\n",
-				activity: "Bundling",
+			sub.notify({
+				type: "delta",
+				tool: { tool_use_id: "t1", output: "two\n", activity: "Bundling" },
 			});
 		});
 
 		await waitFor(() => {
-			const turn = messages.at(-1) as AssistantMessage;
-			// The deltas accumulate and the status is a latest value, which is
-			// what lets the frame hold them merged instead of queued.
-			expect(turn.parts[0]).toMatchObject({
+			const reply = messages.at(-1) as AssistantMessage;
+			// The output accumulates and the activity is a latest value, which
+			// is what lets the frame hold them merged instead of queued.
+			expect(reply.parts[0]).toMatchObject({
 				type: "tool_call",
 				tool: { output: "one\ntwo\n", activity: "Bundling" },
 			});
 		});
 	});
 
-	// The same window seen from the other side: a record committed between the
-	// subscription being registered and the history being read comes back in the
-	// page *and* as a notification. Applied twice it would put a second copy of
-	// the message in the transcript, which is what a seq is for — the live record
-	// and the replayed one carry the same one.
-	it("does not apply a record the history page already carried", async () => {
-		mockState.chatMessagesSubscribe.mockImplementation(
-			async (
-				_sessionId: string,
-				onNotification: (notification: ServerNotification) => void,
-			) => {
-				onNotification({
-					type: "message",
-					content: "Do the thing",
-					seq: 5,
-				} as unknown as ServerNotification);
-				onNotification({
-					type: "text",
-					content: "written meanwhile",
-					seq: 6,
-				} as unknown as ServerNotification);
-				return {
-					id: "sub-1",
-					initial: {
-						history: [{ type: "message", content: "Do the thing", seq: 5 }],
-						turn: { phase: "running", open: true, since: "" },
-					},
-				};
+	// An update ending a call's stream is never followed by the output still
+	// held for the frame: it was the call's, and the call is over.
+	it("applies held deltas before the update that ends their stream", async () => {
+		let call = tool("Bash");
+		let t: PageTurn | undefined;
+		const sub = subscribeWith(
+			() => {
+				const asked = msg("Build it");
+				call = tool("Bash", {}, { status: "running" });
+				t = turn({ ended: false }, asked, call);
+				return page([t]);
 			},
+			{ turn: RUNNING_TURN },
 		);
 
 		let messages: Message[] = [];
@@ -721,27 +733,57 @@ describe("useChatMessages", () => {
 			return null;
 		}
 		render(<Probe />);
-
 		await waitFor(() => expect(messages.length).toBeGreaterThan(1));
-		// The user message once, and the record the page did not reach.
-		expect(messages).toHaveLength(2);
-		expect(messages[0]).toMatchObject({
-			role: "user",
-			content: "Do the thing",
+		const id = call.tool?.tool_use_id ?? "";
+
+		act(() => {
+			sub.notify({
+				type: "delta",
+				tool: { tool_use_id: id, output: "late\n" },
+			});
+			sub.notify(
+				update({
+					items: [
+						changedTool(call, {
+							status: "succeeded",
+							result: { text: "done" },
+						}),
+					],
+					turnId: t?.turn?.turn_id,
+					streams_ended: { tools: [id] },
+				}),
+			);
 		});
-		expect(messages[1]).toMatchObject({
-			role: "assistant",
-			parts: [{ type: "text", content: "written meanwhile" }],
+		await act(
+			() =>
+				new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+		);
+
+		const reply = messages.at(-1) as AssistantMessage;
+		expect(reply.parts[0]).toMatchObject({
+			type: "tool_call",
+			tool: { status: "success", result: "done" },
 		});
+		expect(
+			(reply.parts[0] as { tool: { output?: string } }).tool.output,
+		).toBeUndefined();
 	});
 
-	// `chat.resync`: the server could not queue a record for this subscriber and
-	// will send nothing more on it. The record it lost here is the turn's end, so
+	// `chat.resync`: the server could not tell this subscriber something and
+	// will send nothing more on it. What it lost here is the turn's end, so
 	// without a fresh snapshot the bubble would stream forever.
 	it("replaces the transcript with a fresh subscription's snapshot on resync", async () => {
 		let notify: (notification: ChatNotification) => void = () => {};
 		let subscriptions = 0;
 		mockState.chatMessagesUnsubscribe.mockClear();
+		const asked = msg("Do the thing");
+		const working = text("Working");
+		const open = turn({ ended: false }, asked, working);
+		const first = page([open]);
+		const done = text("and done");
+		const finished = page([
+			{ ...open, items: [asked, working, done], turn: ended(open).turn },
+		]);
 		mockState.chatMessagesSubscribe.mockImplementation(
 			async (
 				_sessionId: string,
@@ -749,28 +791,9 @@ describe("useChatMessages", () => {
 			) => {
 				notify = onNotification;
 				subscriptions++;
-				const asked = { type: "message", content: "Do the thing", seq: 1 };
-				const working = { type: "text", content: "Working", seq: 2 };
 				return subscriptions === 1
-					? {
-							id: "sub-1",
-							initial: {
-								history: [asked, working],
-								turn: { phase: "running", open: true, since: "" },
-							},
-						}
-					: {
-							id: "sub-2",
-							initial: {
-								history: [
-									asked,
-									working,
-									{ type: "text", content: " and done", seq: 3 },
-									{ type: "done", seq: 4 },
-								],
-								turn: { phase: "idle", open: false, since: "" },
-							},
-						};
+					? { id: "sub-1", initial: { ...first, turn: RUNNING_TURN } }
+					: { id: "sub-2", initial: { ...finished, turn: IDLE } };
 			},
 		);
 
@@ -791,23 +814,74 @@ describe("useChatMessages", () => {
 		);
 		expect(mockState.chatMessagesUnsubscribe).toHaveBeenCalledWith("sub-1");
 		expect(subscriptions).toBe(2);
-		// Replaced, not appended to: the records the first stream delivered are
-		// in the new snapshot too, and appear once.
+		// Replaced, not appended to.
 		expect(messages).toHaveLength(2);
 		expect(messages[1]).toMatchObject({
 			role: "assistant",
-			parts: [
-				{
-					type: "text",
-					content: expect.stringMatching(/^Working\s*and done$/),
-				},
-			],
+			parts: [{ type: "text", content: "Working\n\nand done" }],
 		});
 	});
 
-	// The tail line's half of the hook: what the main agent is thinking now is
-	// state of its own beside the transcript, and its clock is the server's
-	// reading carried over to this device (docs/turn-progress-ui.md §2.3).
+	describe("a message it sent", () => {
+		// The sender is left out of the update carrying its own message, so the
+		// item is written from the reply — and the bubble the user watched
+		// appear is the one that stays, under the same keys.
+		it("keeps its bubbles when the transcript takes the message in", async () => {
+			const sub = subscribeWith(() => page([turn({}, msg("before"))]));
+			mockState.sendMessage.mockResolvedValue({
+				seq: 50,
+				itemId: 50,
+				messageId: "m50",
+			});
+
+			const { latest, send } = renderSendProbe();
+			await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+			await act(async () => {
+				await send.current("Try again");
+			});
+			const [echo, reply] = latest.messages.slice(-2);
+			expect(reply).toMatchObject({ role: "assistant", status: "sending" });
+
+			act(() =>
+				sub.notify({
+					type: "update",
+					through_seq: 51,
+					turns: [
+						{
+							turn: {
+								turn_id: "t50",
+								origin: "prompt",
+								message_id: "m50",
+								start_seq: 51,
+								ended: false,
+							},
+						},
+					],
+					items: [
+						{
+							turn_id: "t50",
+							item: {
+								id: 50,
+								kind: "message",
+								seq: 50,
+								last_seq: 50,
+								message: { message_id: "m50", content: "Try again" },
+							},
+						},
+					],
+				}),
+			);
+			const after = latest.messages.slice(-2);
+			expect(after.map((m) => m.id)).toEqual([echo.id, reply.id]);
+			expect(after[1]).toMatchObject({ status: "streaming" });
+			expect(
+				latest.messages.filter(
+					(m) => m.role === "user" && m.content === "Try again",
+				),
+			).toHaveLength(1);
+		});
+	});
+
 	describe("a page's send", () => {
 		const ACTION = { page: "p3", action: "approve", data: { id: "42" } };
 
@@ -887,6 +961,9 @@ describe("useChatMessages", () => {
 		});
 	});
 
+	// The tail line's half of the hook: what the main agent is thinking now is
+	// state of its own beside the transcript, and its clock is the server's
+	// reading carried over to this device (docs/turn-progress-ui.md §2.3).
 	describe("the tail line", () => {
 		const RUNNING = {
 			phase: "running" as const,
@@ -894,19 +971,98 @@ describe("useChatMessages", () => {
 			since: "2024-01-01T00:00:00Z",
 		};
 
-		function renderTail() {
-			let notify: (notification: ServerNotification) => void = () => {};
+		function renderTail(streams?: Record<string, unknown>) {
+			let t: PageTurn | undefined;
+			const sub = subscribeWith(
+				() => {
+					t = turn({ ended: false }, msg("Go"));
+					return page([t]);
+				},
+				{ turn: RUNNING, ...(streams ? { streams } : {}) },
+			);
+			setDetailTurn("s1", RUNNING);
+			const latest = {} as ReturnType<typeof useChatMessages>;
+			function TailProbe() {
+				Object.assign(latest, useChatMessages({ sessionId: "s1" }));
+				return null;
+			}
+			render(<TailProbe />);
+			const emit = (...notifications: ChatNotification[]) =>
+				act(() => {
+					for (const n of notifications) sub.notify(n);
+				});
+			const turnId = () => t?.turn?.turn_id;
+			return { latest, emit, turnId };
+		}
+
+		const delta = (content: string): ChatNotification => ({
+			type: "delta",
+			thinking: { content },
+		});
+
+		it("gathers the deltas, and ends where the update says the stream did", async () => {
+			const { latest, emit, turnId } = renderTail();
+			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
+
+			emit(delta(""), delta("**Plan**\n\n"), delta("Read it"));
+			await waitFor(() =>
+				expect(latest.tail.thinking).toMatchObject({
+					content: "**Plan**\n\nRead it",
+				}),
+			);
+
+			// A subagent's thinking is an item of its own and ends nothing.
+			emit(update({ items: [thinking("sub", "task-1")], turnId: turnId() }));
+			expect(latest.tail.thinking).not.toBeNull();
+
+			emit(
+				update({
+					items: [thinking("**Plan**\n\nRead it")],
+					turnId: turnId(),
+					streams_ended: { thinking: true },
+				}),
+			);
+			expect(latest.tail.thinking).toBeNull();
+			// Nor did the deltas reach the transcript: only the items did.
+			const reply = latest.messages.at(-1) as AssistantMessage;
+			expect(reply.parts.map((part) => part.type)).toEqual([
+				"thinking",
+				"thinking",
+			]);
+		});
+
+		// A client subscribing mid-thought has all of it: the snapshot holds what
+		// was thought so far, and the deltas continue it.
+		it("starts from the thinking the subscription came with", async () => {
+			const { latest, emit } = renderTail({
+				thinking: { content: "Checking the " },
+			});
+			await waitFor(() =>
+				expect(latest.tail.thinking).toMatchObject({
+					content: "Checking the ",
+				}),
+			);
+			emit(delta("sender"));
+			await waitFor(() =>
+				expect(latest.tail.thinking).toMatchObject({
+					content: "Checking the sender",
+				}),
+			);
+		});
+
+		// A delta sent during the subscribe round trip is replayed after the
+		// snapshot, and continues it rather than standing in for it.
+		it("continues the subscription's thinking with a delta held across it", async () => {
 			mockState.chatMessagesSubscribe.mockImplementation(
-				async (
-					_sessionId: string,
-					onNotification: (notification: ServerNotification) => void,
-				) => {
-					notify = onNotification;
+				async (_s: string, onNotification: (n: ChatNotification) => void) => {
+					const t = turn({ ended: false }, msg("Go"));
+					onNotification({ type: "delta", thinking: { content: "sender" } });
 					return {
 						id: "sub-1",
 						initial: {
-							history: [{ type: "message", content: "Go", seq: 5 }],
+							...page([t]),
 							turn: RUNNING,
+							streams: { thinking: { content: "Checking the " } },
 						},
 					};
 				},
@@ -918,77 +1074,30 @@ describe("useChatMessages", () => {
 				return null;
 			}
 			render(<TailProbe />);
-			const emit = (...notifications: unknown[]) =>
-				act(() => {
-					for (const n of notifications) notify(n as ServerNotification);
-				});
-			return { latest, emit };
-		}
-
-		const delta = (content_delta: string) => ({
-			type: "thinking_delta",
-			content_delta,
-		});
-
-		it("gathers the deltas and ends with the main agent's thinking record", async () => {
-			const { latest, emit } = renderTail();
-			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
-
-			emit(delta(""), delta("**Plan**\n\n"), delta("Read it"));
 			await waitFor(() =>
 				expect(latest.tail.thinking).toMatchObject({
-					content: "**Plan**\n\nRead it",
-					joinedLate: false,
+					content: "Checking the sender",
 				}),
 			);
-
-			// A subagent's thinking is its own row, not the main agent's pause.
-			emit({ type: "thinking", content: "sub", parent_tool_use_id: "task-1" });
-			expect(latest.tail.thinking).not.toBeNull();
-
-			emit({
-				type: "thinking",
-				content: "**Plan**\n\nRead it",
-				duration_ms: 4000,
-			});
-			expect(latest.tail.thinking).toBeNull();
-			// Nor did the deltas reach the transcript: only the records did (the
-			// subagent's sits flat, its parent not being loaded).
-			const reply = latest.messages.at(-1) as AssistantMessage;
-			expect(reply.parts.map((part) => part.type)).toEqual([
-				"thinking",
-				"thinking",
-			]);
 		});
 
-		// A Codex plan update is the main agent acting; a Claude plan record
-		// names no parent even when a subagent's Task call wrote it.
-		it("ends with a Codex plan update, not a Claude plan record", async () => {
+		// A subscriber that fell behind has deltas turned away, and the next one
+		// it gets is the whole stream so far.
+		it("takes a replacing delta as the whole thinking", async () => {
 			const { latest, emit } = renderTail();
 			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
-
-			emit(delta("half"));
+			emit(delta("abc"));
 			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
-			emit({ type: "plan", tool_use_id: "task-1", steps: [] });
-			expect(latest.tail.thinking).not.toBeNull();
-			emit({ type: "plan", plan_id: "turn:plan:1", steps: [] });
-			expect(latest.tail.thinking).toBeNull();
-		});
-
-		it("ends with the turn, record or not", async () => {
-			const { latest, emit } = renderTail();
-			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
-
-			emit(delta("half"));
-			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
-			emit({ type: "interrupted" });
-			expect(latest.tail.thinking).toBeNull();
+			emit({ type: "delta", thinking: { content: "abcdef", replace: true } });
+			await waitFor(() =>
+				expect(latest.tail.thinking).toMatchObject({ content: "abcdef" }),
+			);
 		});
 
 		// Nothing closes what the user opened, and a thinking they were reading in
 		// the panel becomes a row that is open.
 		it("opens the row a thinking settles into under the open panel", async () => {
-			const { latest, emit } = renderTail();
+			const { latest, emit, turnId } = renderTail();
 			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
 
 			emit(delta(""), delta("Checking"));
@@ -996,11 +1105,13 @@ describe("useChatMessages", () => {
 			act(() => latest.tail.panel.onToggle());
 			expect(latest.tail.panel.expanded).toBe(true);
 
-			// The record and the text after it reaching one render, as two socket
-			// messages close together do.
 			emit(
-				{ type: "thinking", content: "Checking", duration_ms: 2000 },
-				{ type: "text", content: "Done." },
+				update({
+					items: [thinking("Checking")],
+					turnId: turnId(),
+					streams_ended: { thinking: true },
+				}),
+				update({ items: [text("Done.")], turnId: turnId() }),
 			);
 			const reply = latest.messages.at(-1) as AssistantMessage;
 			const row = reply.parts[0];
@@ -1011,56 +1122,47 @@ describe("useChatMessages", () => {
 		// The panel open on something else — the plan — never showed a thinking
 		// with no text, so its row has nothing the reader was following.
 		it("leaves closed the row of a thinking the open panel had no text for", async () => {
-			const { latest, emit } = renderTail();
+			const { latest, emit, turnId } = renderTail();
 			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
 
 			emit(delta(""));
 			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
 			act(() => latest.tail.panel.onToggle());
-			emit({ type: "thinking", content: "Checking", duration_ms: 2000 });
+			emit(
+				update({
+					items: [thinking("Checking")],
+					turnId: turnId(),
+					streams_ended: { thinking: true },
+				}),
+			);
 			expect(latest.openedThoughtIds.size).toBe(0);
 		});
 
-		// Notifications held across a subscribe are replayed after the page: the
-		// deltas come back with no seq, the record that ended them is skipped as
-		// already on screen, and has to end them all the same.
-		it("ends with a record the history page already had", async () => {
-			const { latest, emit } = renderTail();
-			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
-
-			emit(delta("x"));
+		// An update held across a subscribe that the page already holds is
+		// skipped, and still ends the stream it says it ended.
+		it("ends with an update the page already held", async () => {
+			const { latest, emit } = renderTail({ thinking: { content: "x" } });
 			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
-			emit({ type: "thinking", content: "x", duration_ms: 1000, seq: 5 });
-			expect(latest.tail.thinking).toBeNull();
-			// Still skipped, not applied a second time.
-			expect(
-				latest.messages.some(
-					(m) =>
-						m.role === "assistant" &&
-						m.parts.some((part) => part.type === "thinking"),
-				),
-			).toBe(false);
-		});
-
-		// Output proves the thinking is over even if its record never comes; a
-		// subagent's says nothing about the main agent.
-		it("ends with the main agent's next output", async () => {
-			const { latest, emit } = renderTail();
-			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
-
-			emit(delta("x"));
-			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
-			emit({ type: "text", content: "sub", parent_tool_use_id: "task-1" });
-			expect(latest.tail.thinking).not.toBeNull();
-			emit({ type: "text", content: "Here it is." });
+			emit({
+				type: "update",
+				through_seq: 1,
+				streams_ended: { thinking: true },
+			});
 			expect(latest.tail.thinking).toBeNull();
 		});
 
 		it("is not brought back by deltas still waiting for their frame", async () => {
-			const { latest, emit } = renderTail();
+			const { latest, emit, turnId } = renderTail();
 			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
 
-			emit(delta("late"), { type: "thinking", content: "late" });
+			emit(
+				delta("late"),
+				update({
+					items: [thinking("late")],
+					turnId: turnId(),
+					streams_ended: { thinking: true },
+				}),
+			);
 			await act(
 				() =>
 					new Promise<void>((resolve) =>
@@ -1070,14 +1172,14 @@ describe("useChatMessages", () => {
 			expect(latest.tail.thinking).toBeNull();
 		});
 
-		// A restart, or a stop that cut a codex item short, leaves no record.
-		it("ends when the turn closes without a record", async () => {
+		// A restart leaves nothing to say the thinking ended.
+		it("ends when the turn closes", async () => {
 			const { latest, emit } = renderTail();
 			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
 
 			emit(delta("x"));
 			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
-			act(() => setDetailTurn("s1", { phase: "idle", open: false, since: "" }));
+			act(() => setDetailTurn("s1", IDLE));
 			expect(latest.tail.thinking).toBeNull();
 		});
 
@@ -1136,20 +1238,16 @@ describe("useChatMessages", () => {
 			return state;
 		}
 
-		function subscribeWith(
-			history: unknown[],
-			rest: Record<string, unknown> = {},
-		) {
-			mockState.chatMessagesSubscribe.mockImplementation(async () => ({
-				id: "sub-1",
-				initial: {
-					history,
+		/** An older page, built before the newest so its items are older. */
+		const older = () => page([turn({}, msg("Earlier question"), text("a"))]);
+
+		function subscribeNewest() {
+			subscribeWith(() =>
+				page([turn({ continued: true }, text("tail"))], {
 					has_more: true,
 					next_before_seq: 7,
-					turn: { phase: "idle", open: false, since: "" },
-					...rest,
-				},
-			}));
+				}),
+			);
 		}
 
 		// A phone reconnects mid-page as a matter of course, and the request it
@@ -1158,9 +1256,10 @@ describe("useChatMessages", () => {
 		// good: the spinner would spin forever, and the transcript — which refuses
 		// to ask while a page is on its way — would never page again.
 		it("leaves paging usable when a reconnect interrupts a page in flight", async () => {
-			subscribeWith([{ type: "text", content: "tail" }]);
+			const earlier = older();
+			subscribeNewest();
 			// The page the reconnect discards: it answers only after the fact.
-			let deliver: (page: unknown) => void = () => {};
+			let deliver: (p: ChatPage) => void = () => {};
 			mockState.chatMessagesHistory.mockImplementationOnce(
 				() =>
 					new Promise((resolve) => {
@@ -1177,16 +1276,13 @@ describe("useChatMessages", () => {
 
 			await state.reconnect();
 			await act(async () => {
-				deliver({ history: [], has_more: false });
+				deliver(page([]));
 			});
 
 			expect(state.isLoadingMore).toBe(false);
 
 			// And the next page is asked for rather than refused.
-			mockState.chatMessagesHistory.mockResolvedValue({
-				history: [{ type: "message", content: "Earlier question" }],
-				has_more: false,
-			});
+			mockState.chatMessagesHistory.mockResolvedValue(earlier);
 			await act(async () => {
 				await state.loadMore();
 			});
@@ -1196,14 +1292,10 @@ describe("useChatMessages", () => {
 			});
 		});
 
-		it("asks for the page the server pointed at, not one it worked out itself", async () => {
-			// The page starts on a record with no seq of its own, so a cursor
-			// derived from the transcript would name the wrong record — or none.
-			subscribeWith([{ type: "text", content: "tail" }]);
-			mockState.chatMessagesHistory.mockResolvedValue({
-				history: [{ type: "message", content: "Earlier question" }],
-				has_more: false,
-			});
+		it("asks for the page the server pointed at, and puts it in front", async () => {
+			const earlier = older();
+			subscribeNewest();
+			mockState.chatMessagesHistory.mockResolvedValue(earlier);
 
 			const state = renderPager();
 			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
@@ -1220,63 +1312,8 @@ describe("useChatMessages", () => {
 			expect(state.hasMoreHistory).toBe(false);
 		});
 
-		it("brings an older page up to date with what the loaded pages already answered", async () => {
-			// The result of the call landed in the page that was loaded first, so
-			// the older page on its own still shows the call as running.
-			subscribeWith([
-				{ type: "tool_result", tool_use_id: "t1", tool_result: "file body" },
-			]);
-			mockState.chatMessagesHistory.mockResolvedValue({
-				history: [
-					{ type: "message", content: "Read it" },
-					{ type: "tool_call", tool_use_id: "t1", tool_name: "Read" },
-				],
-				has_more: false,
-			});
-
-			const state = renderPager();
-			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
-			await act(async () => {
-				await state.loadMore();
-			});
-
-			const answer = state.messages.at(-1) as AssistantMessage;
-			expect(answer.parts).toMatchObject([
-				{ type: "tool_call", tool: { result: "file body" } },
-			]);
-		});
-
-		it("hands the record that ended a turn down to the page that turn is on", async () => {
-			// The loaded page opens on the `error` that ended the turn below it, and
-			// so replays without it. The older page must not come back claiming the
-			// turn finished normally.
-			subscribeWith([
-				{ type: "error", error: "boom" },
-				{ type: "message", content: "Next" },
-			]);
-			mockState.chatMessagesHistory.mockResolvedValue({
-				history: [
-					{ type: "message", content: "Explain" },
-					{ type: "text", content: "half an answer" },
-				],
-				has_more: false,
-			});
-
-			const state = renderPager();
-			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
-			await act(async () => {
-				await state.loadMore();
-			});
-
-			expect(state.messages[1]).toMatchObject({
-				role: "assistant",
-				status: "error",
-				error: "boom",
-			});
-		});
-
 		it("says why an earlier page is missing rather than passing it off as the start", async () => {
-			subscribeWith([{ type: "text", content: "tail" }]);
+			subscribeNewest();
 			mockState.chatMessagesHistory.mockRejectedValue(
 				new Error("invalid history cursor: 7"),
 			);
@@ -1293,12 +1330,12 @@ describe("useChatMessages", () => {
 		});
 
 		it("does not page while a page is already in flight", async () => {
-			subscribeWith([{ type: "text", content: "tail" }]);
+			subscribeNewest();
 			let release: (() => void) | undefined;
 			mockState.chatMessagesHistory.mockImplementation(
 				() =>
 					new Promise((resolve) => {
-						release = () => resolve({ history: [], has_more: false });
+						release = () => resolve(page([]));
 					}),
 			);
 

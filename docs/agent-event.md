@@ -13,12 +13,14 @@ AI CLI (stdout)
              │  the chat client writes through it too)
              ├─ Append: store.AppendToHistory (agent.Record), then enqueue;
              │          Publish for an agent.LiveEvent, which is never stored
+             │  (the append folds the record into projection.Live)
              → ChatMessagesWatcher.Enqueue (implements chatstream.Sink)
-                 → Broadcast: JSON-RPC notification ("chat.<type>")
+                 → Broadcast: what the record changed ("chat.update"),
+                   or a live event's stream extended ("chat.delta")
                    → WebSocket → Frontend
                      → wsStore (route by subscription ID)
-                       → normalizeEvent (snake_case → camelCase)
-                         → applyServerEvent (message state reducer)
+                       → useChatMessages → ChatItems (the items as sent)
+                         → buildTranscript (items → Message[])
                            → UI render (ContentPart[])
 ```
 
@@ -107,9 +109,9 @@ that shows where the line really is. What a running tool call is doing right now
 is a latest value — a snapshot of it in a transcript is wrong the moment the next
 one arrives — yet it has to reach every subscriber the instant it happens, which
 is the broadcast half of being an event. So it is an event that is **broadcast
-and never recorded** (an `agent.LiveEvent`), and the process keeps the newest one
-per call still in flight as the state it also is, to hand to a client that
-subscribes mid-run ([tool-call-model.md](tool-call-model.md#tool_activity-is-not-persisted)).
+and never recorded** (an `agent.LiveEvent`), and the chat watcher keeps the
+stream of each call still in flight as the state it also is, to hand to a client
+that subscribes mid-run ([agent-chat.md](agent-chat.md#live-updates)).
 An unpersisted event carries no `seq`, which is exactly what the broadcast rule
 below already said about a record that does not exist.
 
@@ -121,9 +123,10 @@ happened, what it said and how long it took stays true, so it is a **recorded**
 `thinking` event, written once the thinking is over. That the agent is thinking
 *right now* lasts seconds and only changes the tail line's words, so it is
 `thinking_delta`: **broadcast and never recorded**, the same exception
-`tool_activity` is. Unlike `tool_activity`, nothing keeps a snapshot of it for a
-client that subscribes mid-thinking: such a client shows `Working` until the
-next signal, and gets the whole text with the record.
+`tool_activity` is, and kept the same way: the chat watcher holds the thinking
+so far until the record that settles it, so a client that subscribes
+mid-thinking starts from the text already streamed
+([agent-chat.md](agent-chat.md#live-updates)).
 
 ```jsonc
 { "type": "thinking",
@@ -155,7 +158,7 @@ it to its deltas, because there is only ever one live thinking. A thinking the
 engine never finished — Codex's, cut off by Stop — leaves no record at all.
 
 **The duration is the server's measurement, never the client's.** A client only
-has the moment a record reached it, which means nothing on replay — the reason
+has the moment a record reached it, which means nothing on a reload — the reason
 a tool row's observed times are server stamps too
 ([tool-call-model.md](tool-call-model.md#observed-times-and-reported-durations)).
 The server takes the reading while the thinking happens and stores
@@ -187,7 +190,7 @@ when, and why that read-back is acceptable).
 
 The four predicates, answered explicitly:
 
-- **Persisted: yes** (`PlanRecord`). It is history, and replay draws the plan from it.
+- **Persisted: yes** (`PlanRecord`). It is history, and a reload draws the plan from it.
 - **`AwaitsUserInput`: no.** Nobody answers a plan.
 - **`IndicatesAgentActivity`: yes.** It only arrives while the agent is working,
   so `plan` is in that allowlist's switch in `server/agent/event.go`.
@@ -289,8 +292,9 @@ Codex never writes one.
 point, position is no help: it names the turn that was stopped, not the message,
 and the message record may sit pages earlier. It is a record of something that
 happened *to* the message, not a correction of it: the `message` record and any
-`message_ingested` above it stay as written, and a client derives the ending by
-joining the two on that id
+`message_ingested` above it stay as written; the projection marks the message
+and lists it on the turn, and a client derives the ending by joining the two on
+that id
 ([code/frontend-state.md](code/frontend-state.md#discarded-messages)).
 
 It ends nothing. Of the four state questions only persisted holds: it neither
@@ -431,9 +435,9 @@ gets — one card per question, since a legacy record could carry several under 
 
 `question_response` carries an `answers` object, a `map[string]string`: one entry per
 question, keyed by the question text, whose value is the labels picked joined with
-`", "` plus a trailing `Other: <free text>` entry. The client parses that string
-back into the two halves a card draws (`web/src/utils/questionAnswer.ts`), which
-is why the parser is still there. A `nil` map means the CLI cancelled the question
+`", "` plus a trailing `Other: <free text>` entry. The server's projection parses
+that string back into the two halves a card draws (`parseLegacyAnswer` in
+`server/projection/normalize.go`), which is why the parser is still there. A `nil` map means the CLI cancelled the question
 instead, and it arrives as an **absent key rather than `null`** — the field was
 written `omitempty`, and that was right: every record type was once
 serialized through one flat struct, so dropping it would have put
@@ -551,9 +555,9 @@ exactly a line of text followed by the document.
 
 A file block describes its content — name, MIME type, size, an image's
 dimensions — and names it by id; it never carries it. That follows the same rule
-the rest of the record does: a record is replayed with every page of scrollback,
-so an image written into one would be re-sent for as long as the session
-exists. Where the bytes live instead, why the two agents' very different
+the rest of the record does: a result is sent again with every page that holds
+its call, so an image written into one would be re-sent for as long as the
+session exists. Where the bytes live instead, why the two agents' very different
 deliveries (Claude hands over content, Codex hands over a path) are made one
 before they reach here, and what a fork has to do about it are in
 [code/agent-integration.md](code/agent-integration.md#content-blocks-and-attachments).
@@ -576,86 +580,63 @@ owns them.
 
 ### Broadcasting
 
-`server/watch/chat_messages.go` — `ChatMessagesWatcher` implements `chatstream.Sink`. The session's `chatstream.Sequencer` hands it every record — the process's and the ones Pockode writes itself — in seq order, each right after it is persisted (a live event, never persisted, in its place among them; a record whose append failed is replaced by a `history_write_failed` warning with no seq). It queues a JSON-RPC notification with method `"chat.<event-type>"`, carrying the subscription ID for client-side routing, for each subscriber of the session, each on a bounded queue of its own (overflow drops live progress, or ends the subscription with `chat.resync` — [code/subscription-system.md](code/subscription-system.md#chat-delivery)). Each notification also carries the record's `seq`, the same address a history page carries on its records ([paging](agent-chat.md#history-paging)), so a client cannot tell a replayed record from a live one when it names a point in the conversation ([code/agent-integration.md](code/agent-integration.md#history-storage)). Events that were not persisted carry none.
+`server/watch/chat_messages.go` — `ChatMessagesWatcher` implements `chatstream.Sink`. The session's `chatstream.Sequencer` hands it every record — the process's and the ones Pockode writes itself — in seq order, each right after it is persisted and folded into the session's projection (a live event, never persisted, in its place among them; a record whose append failed is replaced by a `history_write_failed` warning with no seq). Records do not go out as themselves: for each one it queues a `chat.update` saying what the record changed in the transcript — the turns and items it changed, each as it stands now, in the shape a history page uses — and for a live event a `chat.delta` extending the stream it belongs to; both carry the subscription ID for client-side routing, for each subscriber of the session, each on a bounded queue of its own (overflow drops deltas, repaired by the next, or ends the subscription with `chat.resync` — [code/subscription-system.md](code/subscription-system.md#chat-delivery)). The shapes and the ordering rules are in [agent-chat.md](agent-chat.md#live-updates). An item carries its `seq` and `last_seq`, the addresses a history page's items carry ([paging](agent-chat.md#history-paging)), so a point in the conversation is named the same way whichever route told the client of it ([code/agent-integration.md](code/agent-integration.md#history-storage)).
 
-A user message is broadcast to every subscriber except the tab that sent it, which has already echoed the message into its own transcript. That tab therefore learns its own record's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it. Replayed history, live notification and that reply all carry the same `seq` and `message_id`, so what a client can name does not depend on which of the three delivered the record. For a message that invoked a [Pockode command](pockode-commands.md) the reply also carries the record's `content` and `command`, for the same reason: the sender typed `/pockode-lead`, and the prompt the agent was sent instead reaches it nowhere else. A message carrying `answering` gets `content` back the same way: the sender sent none, and the body the server wrote from the answers reaches it nowhere else. A message carrying files gets `attachments` back too: the sender knew only what the browser guessed about each file. A page's action gets `content` and `html_action` back: the sender echoed only the action, and the text the agent was sent reaches it nowhere else. A message no record names stays unaddressable, and a client must not number it itself.
+A user message's item is sent to every subscriber except the tab that sent it, which has already echoed the message into its own transcript; the rest of that update still reaches it. That tab therefore learns its own item's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it, which carries the item's `item_id` beside its `seq` and `message_id`: every later update names the message by that id. Pages, updates and that reply all carry the same `seq` and `message_id`, so what a client can name does not depend on which of the three delivered the message. For a message that invoked a [Pockode command](pockode-commands.md) the reply also carries the record's `content` and `command`, for the same reason: the sender typed `/pockode-lead`, and the prompt the agent was sent instead reaches it nowhere else. A message carrying `answering` gets `content` back the same way: the sender sent none, and the body the server wrote from the answers reaches it nowhere else. A message carrying files gets `attachments` back too: the sender knew only what the browser guessed about each file. A page's action gets `content` and `html_action` back: the sender echoed only the action, and the text the agent was sent reaches it nowhere else. A message no record names stays unaddressable, and a client must not number it itself.
 
 ## Frontend
 
 ### Type Layers
 
-Three representations of the same data, each serving a different purpose:
+A client never sees records: the server sends what they made of the
+transcript ([agent-chat.md](agent-chat.md#history-paging)). Three
+representations stand between the wire and the screen:
 
 | Type | File | Format | Purpose |
 |------|------|--------|---------|
-| `ServerNotification` | `web/src/types/message.ts`, over `web/src/types/wire.generated.ts` | snake_case (wire format), generated from the Go record types ([how](code/agent-integration.md#the-clients-copy-is-generated)) | WebSocket reception |
-| `NormalizedEvent` | `web/src/lib/messageReducer.ts` | camelCase | Internal processing |
-| `ContentPart` | `web/src/types/message.ts` | Structured union | UI rendering |
+| `ChatPage`, `ChatUpdate`, `ChatDelta` | `web/src/types/chatItems.ts`, nesting payloads from `web/src/types/wire.generated.ts` | snake_case (wire format); hand-written against `server/projection` | WebSocket reception |
+| `ChatItems` | `web/src/lib/chatItems.ts` | The items as sent, by id | The client's copy of the transcript |
+| `Message`, `ContentPart` | `web/src/types/message.ts` | Structured union | UI rendering |
 
-### Message Reducer
+### From Items to Parts
 
-`web/src/lib/messageReducer.ts` — Stateless reducer that builds message state from events:
+`buildTranscript` (`web/src/lib/transcript.ts`) turns the items into the
+`Message[]` the chat renders, and decides only how they are drawn
+([code/frontend-state.md](code/frontend-state.md#the-transcript)). What the
+records said is already folded into the items by the server — a result into its
+call, an answer into its question, a permission request and its answer into the
+call it held — so the joins that used to be the client's are the server's,
+with these left to the presentation:
 
-- **`normalizeEvent`** — snake_case → camelCase conversion
-- **`applyServerEvent`** — Updates message list; creates new assistant message on first content event, appends content events, applies terminal events to mark complete/error/interrupted
-- **`applyEventToParts`** — Converts each event to a `ContentPart` for rendering
-
-Events do not map one-to-one onto parts. Several events can describe the same
-tool use, and the reducer folds them into the one part that renders it, matching
-on `tool_use_id` — every entry below but the last, which is the one case where an
-event folds into a part its own id does not name:
-
-- `tool_result` merges into its `tool_call` part, carrying its content blocks
-  with it — so a returned image is shown against the call that produced it
-  rather than floating loose in the transcript, which is what the warning it
-  replaces used to do.
-- `permission_request` takes the place of its `tool_call` part too, and the
-  reducer gives the row back when the engine reports on the call — the two CLIs
-  do not agree on which of the call and the approval is announced first, and
-  neither order may draw a row spinning beside a card that is waiting for a
-  person ([code/frontend-state.md](code/frontend-state.md#tool-runs)).
-- `tool_activity` updates the run it names and is dropped when there is none on
-  screen. It never enters history, so replay has none of it, and a row is
-  readable without it.
-- `question_posted` takes the place of the `question_post` tool row, matched by
-  position rather than by id: the record is written *during* that MCP call, so it
-  necessarily falls between the call's `tool_call` and its `tool_result`. There is
-  no id to join on — an MCP call reaches the server over HTTP and the CLI's
-  `tool_use_id` is not in it. Missing the take-over costs two rows saying one
-  thing, which is a degradation rather than an error. Of the records one call
-  writes, only the first takes the row; the rest follow the last card sharing
-  their `asked_at`, so the batch stays together.
-- `plan` with a `tool_use_id` (Claude) folds into that call's run as
-  `ToolRun.plan` and draws nothing of its own. A Codex `plan`, which has
-  `plan_id` instead, becomes a settled `Plan` run of its own, keyed by that id
+- A call held on a permission request is drawn as the card in its row's place,
+  and as the row again once it runs — neither order of call and approval may
+  draw a row spinning beside a card waiting for a person
+  ([code/frontend-state.md](code/frontend-state.md#tool-runs)).
+- What a call in flight says about itself (`tool_activity`, a `chat.delta`) is
+  drawn on its row while it runs. It never enters history, so a page has none
+  of it, and a row is readable without it.
+- A posted question takes the place of the `question_post` tool row, matched by
+  position rather than by id: the record is written *during* that MCP call, so
+  it falls before the call's result. There is no id to join on — an MCP call
+  reaches the server over HTTP and the CLI's `tool_use_id` is not in it. Missing
+  the take-over costs two rows saying one thing, which is a degradation rather
+  than an error. Of one call's questions only the first takes the row; the rest
+  follow the last card sharing their `asked_at`, so the batch stays together.
+- A plan filed on a call (Claude) rides on that call's item and draws nothing
+  of its own. A Codex plan, an item of its own, becomes a settled `Plan` row
   ([turn-progress-ui.md §4.6](turn-progress-ui.md#46-the-plan-record)).
-- `ask_user_question` (legacy) takes the place of its `tool_call` part by id.
-  Claude asked through a regular tool call, so one question arrived as
-  `tool_call` → `ask_user_question` → `question_response` → `tool_result`; the
-  cards render the questions and the answers, and the trailing `tool_result`
-  matches no `tool_call` and is dropped as an orphan.
-- `tool_call` **carrying `origin_tool_use_id`** folds into the part that *other*
-  id names instead of drawing one of its own. Claude's `TaskOutput` is a call
-  whose whole content is an earlier call's output, so a row of its own would sit
-  a screenful below the work it describes with an opaque `task_id` as the only
-  thing tying the two together. Two things are unique to it: it is matched on
-  someone else's id, and it is the only event that can fold into a part in an
-  *earlier message* rather than the one being streamed. Its `tool_result`
-  follows it there — the entry the fold leaves on the run is what gives a result
-  naming a row that no longer exists somewhere to go. When the named part is not
-  loaded the call falls through and draws an ordinary row, which is the common
-  case rather than a fallback
+- A legacy question (the CLI's own `ask_user_question`) takes the place of its
+  ask call's row by id, one card per question.
+- A fetch (`origin_tool_use_id`) is drawn on the call it reads instead of as a
+  row of its own: Claude's `TaskOutput` is a call whose whole content is an
+  earlier call's output, so a row of its own would sit a screenful below the
+  work it describes with an opaque `task_id` as the only thing tying the two
+  together. When that call is not loaded the fetch draws an ordinary row
   ([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)).
-- `tool_call` **with `subtype: "resumed"`** draws nothing of its own: it
-  announces again a call that has settled, because its work is running again
-  — today a Codex subagent given more work under the spawn that started it
-  ([code/agent-integration.md](code/agent-integration.md#subagent-threads)).
-  The record says only that; the run it names goes back to `running`, wherever it
-  sits, until something settles it as it settles any running call — its next
-  `tool_result`, a Stop, the process ending — and nothing happens when that run is
-  not loaded ([code/frontend-state.md](code/frontend-state.md#a-subagents-children)).
-  A subtype rather than a type of its own, so that a client that predates it
-  reads a resend of the call, which changes nothing.
+- A subagent's work is nested in its call's item and drawn as the run's
+  children; a call running again (a Codex subagent given more work) is the same
+  item back to `running`
+  ([code/frontend-state.md](code/frontend-state.md#a-subagents-children)).
 
 Blocks are read into a narrowed union at the wire boundary
 (`web/src/lib/contentBlocks.ts`), where one the client cannot read is dropped
@@ -679,17 +660,19 @@ file too large to send and a binary read the same in both places.
 
 ### Message Status Transitions
 
+A reply's status is its turn's, from the turn the item stretch names:
+
 ```
-(first content event) → "streaming"
-    → done           → "complete"
-    → error          → "error"
-    → interrupted    → "interrupted"
-    → process_ended  → "process_ended"
+turn not ended (the newest) → "streaming"
+ended_by done               → "complete"
+ended_by failed/auth_failed → "error"
+ended_by interrupted        → "interrupted"
+ended_by process_ended      → "process_ended"
 ```
 
 ### Subscription
 
-`web/src/hooks/useChatMessages.ts` — Subscribes via `chat.messages.subscribe` RPC, receives the newest page of history, replays it through the reducer, then processes live notifications through the same pipeline. Earlier pages are fetched on demand as the user scrolls back and spliced in front of what is already there ([agent-chat.md](agent-chat.md#reading-a-page-on-the-client)).
+`web/src/hooks/useChatMessages.ts` — Subscribes via `chat.messages.subscribe` RPC, installs the newest page and the live streams it came with, then applies `chat.update` and `chat.delta` notifications to the same store. Earlier pages are fetched on demand as the user scrolls back and added in front of what is already there ([agent-chat.md](agent-chat.md#reading-a-page-on-the-client)).
 
 ## Key Files
 
@@ -707,7 +690,9 @@ file too large to send and a binary read the same in both places.
 | Backend | `server/agent/wirets/` | Generates the frontend's record and live-event types from `agent.WireTypes()` |
 | Frontend | `web/src/types/wire.generated.ts` | Record and live-event types, generated — never edited by hand |
 | Frontend | `web/src/types/message.ts` | ContentPart and other client definitions |
-| Frontend | `web/src/lib/messageReducer.ts` | Event normalization and state reduction |
+| Frontend | `web/src/types/chatItems.ts` | Page, update and delta types, hand-written against `server/projection` |
+| Frontend | `web/src/lib/chatItems.ts` | The client's copy of the transcript's items |
+| Frontend | `web/src/lib/transcript.ts` | Items → the messages and parts the chat draws |
 | Frontend | `web/src/lib/contentBlocks.ts` | Content block parsing at the wire boundary |
-| Frontend | `web/src/hooks/useChatMessages.ts` | Subscription and history replay |
+| Frontend | `web/src/hooks/useChatMessages.ts` | Subscription, paging and live updates |
 | Frontend | `web/src/lib/wsStore.ts` | WebSocket routing by subscription ID |

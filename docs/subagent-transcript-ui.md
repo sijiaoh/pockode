@@ -295,29 +295,18 @@ the children, and the report is drawn once, at the end, under its label.
 
 ### Unfiled children
 
-A subagent's children can have loaded before its call: the page holding the
-call came later than the page holding its work, and that work sits flat in the
-chat where it first loaded ([what is not filed](tool-call-ui.md#what-is-not-filed)).
-The inline Process can only count those and say they are further down; the
-layer can do better, because it is drawn from the whole loaded transcript and
-not from one row's subtree.
+A subagent's work arrives inside its call: the server nests every item naming a
+call the history holds in that call's `children`, so a page holds a run with
+its work however the records interleaved, and work recorded before its call is
+moved under it once the call arrives
+([what is not filed](tool-call-ui.md#what-is-not-filed)). A page boundary
+therefore never leaves children flat beside a loaded call.
 
-**The level draws them in place, after the filed ones.** The filed children are
-the older work, from the call's own page; the flat ones are the newer — while
-any are flat, later work goes flat after them — so filed then unfiled is
-arrival order, and the level is the subagent's work whole. No divider and no
-note between the two: the split is where a page boundary fell, which is a fact
-about loading and not about the subagent. The inline Process keeps its *N more
-further down* line, and the chat keeps the flat parts where they are — the
-layer is a view and moves nothing in the transcript under it.
-
-A run's row only needs a count, a step count and the latest child
-(`unfiledChildren`); the layer needs the parts themselves. Both are read from
-one sibling walk, `unfiledParts(messages)` in `lib/subagentRun.ts`, which hands
-back the flat parts keyed by the run's `tool_use_id`, in arrival order.
-
-A subagent whose **call** is not loaded has no row and no Process, so it has no
-way in; its flat children read as they do today.
+What stays flat is work whose call is not in the history at all — a fork cut
+the call off — and transcripts recorded before children were attributed. With
+no call there is no row and no Process, so there is no way in; that work reads
+where it is in the chat. A level draws only its run's `children`: flat work
+can never name a run the client holds, so there is nothing to pair it with.
 
 ### Errors
 
@@ -511,8 +500,8 @@ with that level: the host is unmounted with it.
 
 Of the contexts the chat's list provides, a level provides its own transcript
 view (`holdAt`, with the level's scroller behind it) and, once for the whole
-layer, the unfiled children and the subagent resumes, read from the same whole
-transcript as the chat's. The rest it leaves at their defaults: the turn's tail
+layer, the subagent resumes, read from the same whole transcript as the
+chat's. The rest it leaves at their defaults: the turn's tail
 reads idle, since a level is no turn and has no tail of its own, and there is no
 tool jump (*Go to call*), whose one user — a turn's changes card — belongs to a
 turn and is not drawn in a level.

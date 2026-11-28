@@ -189,6 +189,10 @@ func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content strin
 type Sent struct {
 	Seq       session.HistorySeq
 	MessageID string
+	// ItemID is the transcript item the record started (projection.PageItem.ID),
+	// for a sender left out of the update that carries it; 0 when Seq is, or
+	// when it was not asked for (no sender to leave out).
+	ItemID int
 	// ObservedAt is the moment the record carries (agent.MessageEvent.ObservedAt),
 	// zero exactly when Seq is: a sender told a moment no record holds would
 	// draw a figure its next reload cannot.
@@ -270,7 +274,15 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		c.noteIngested(ctx, sessionID, event.MessageID)
 	}
 
-	return Sent{Seq: seq, MessageID: event.MessageID, ObservedAt: event.ObservedAt}, nil
+	sent := Sent{Seq: seq, MessageID: event.MessageID, ObservedAt: event.ObservedAt}
+	if seq.Valid() && exclude != nil {
+		// The update that carries the message went to everyone but the sender,
+		// and every later one names it by its item id.
+		if sent.ItemID, err = c.projections.ItemAt(ctx, sessionID, seq); err != nil {
+			slog.Warn("failed to look up a sent message's item", "sessionId", sessionID, "seq", seq, "error", err)
+		}
+	}
+	return sent, nil
 }
 
 // processToDeliverTo returns the process a message is about to be handed to,

@@ -1,4 +1,5 @@
 import type { AppAuthCredentialParams } from "../lib/loginTicket";
+import type { ChatPage, ChatStreams } from "./chatItems";
 import type { ContentBlock, FileBlock } from "./content";
 import type { AgentType } from "./settings";
 import type * as Wire from "./wire.generated";
@@ -140,9 +141,10 @@ export type MessageStatus =
 	| "process_ended";
 
 /**
- * How one tool call stands right now. Derived by the message reducer from the
- * records it has — never sent on the wire, because every input to the
- * derivation already is (docs/tool-call-model.md#toolrun).
+ * How one tool call stands right now, as the row draws it: the server's item
+ * status (`ToolItemStatus`) read onto the row's five
+ * (docs/tool-call-model.md#toolrun). A call waiting on permission, or refused
+ * or expired before it ran, is drawn as its card instead.
  *
  * `background` is not a finished state: it is `running` wearing a badge, for a
  * call that handed its work to something outliving the turn.
@@ -167,38 +169,33 @@ export interface PlanStep {
 }
 
 /**
- * The plan as one `plan` record said it was at that moment. A record, never
- * updated: the newest one by `order` is the current plan.
+ * The plan as one `plan` record said it was at that moment: the newest one by
+ * `order` is the current plan.
  */
 export interface ToolRunPlan {
 	steps: PlanStep[];
 	/** Codex's note on the plan, when it gave one. */
 	explanation?: string;
 	/**
-	 * Where the record stands in record order, which is what "newest" means
-	 * (docs/turn-progress-ui.md#46-the-plan-record): its history seq, or — for
-	 * a record the server could not persist — a fraction past the newest seq
-	 * loaded when it arrived, so the next persisted record is newer
-	 * (docs/code/frontend-state.md#a-plan-filed-on-the-call-that-wrote-it).
+	 * Where the plan stands in record order, which is what "newest" means
+	 * (docs/turn-progress-ui.md#46-the-plan-record): the seq of the item that
+	 * carries it — a Codex plan's own, or the newest record of the call it was
+	 * filed on.
 	 */
 	order: number;
 }
 
 /**
- * One fetch of an earlier call's output, recorded on the call it read.
- *
- * Keyed by the fetching call's own `tool_use_id`, never simply appended: a
- * history page replayed over a transcript that already holds it sends the same
- * `tool_result` a second time, and appending would draw that one fetch twice.
+ * One fetch of an earlier call's output, drawn on the call it read: the
+ * fetching call's own item, filed there by its `origin_tool_use_id`.
  */
 export interface ToolFetch {
 	/** The `tool_use_id` of the call that fetched this. */
 	id: string;
 	/**
-	 * `running` from the moment the call is filed until its result arrives;
-	 * `interrupted` when what ends a running run ended it first. Settled by the
-	 * same sweeps as a run, replay included, and kept like a run's: a result
-	 * reaching an interrupted fetch is kept but does not make it `returned`.
+	 * `running` until its result arrives; `interrupted` when what ends a
+	 * running call ended it first — a result reaching it after that is kept but
+	 * does not make it `returned`.
 	 */
 	state: "running" | "returned" | "interrupted";
 	/**
@@ -253,7 +250,7 @@ export interface SubagentReport extends SubagentCounts {
 	agentType?: string;
 }
 
-/** How far a running subagent has come, from `tool_activity`. Live state. */
+/** How far a running subagent has come, from its call's stream. Live state. */
 export interface SubagentProgress extends SubagentCounts {
 	/** The tool it called most recently. */
 	lastToolName?: string;
@@ -276,8 +273,9 @@ export interface WorkRef {
  * machines and two settle-on-interrupt paths for one thing. `TaskItem` stays,
  * as the renderer for that category.
  *
- * The reducer is the only author. A renderer switches on `status` and infers
- * nothing of its own.
+ * Built from the call's item by the transcript (lib/transcript.ts), which is
+ * its only author. A renderer switches on `status` and infers nothing of its
+ * own.
  */
 export interface ToolRun {
 	id: string;
@@ -287,8 +285,9 @@ export interface ToolRun {
 	status: ToolRunStatus;
 	/**
 	 * The latest one-line status of a call still running. Live state: it comes
-	 * from `tool_activity`, which is never persisted, so a replayed run has none
-	 * and is still correct — `status` is what carries "still going".
+	 * from the call's stream (`chat.delta`), which is never persisted, so a run
+	 * read from history has none and is still correct — `status` is what
+	 * carries "still going".
 	 */
 	activity?: string;
 	/**
@@ -305,7 +304,7 @@ export interface ToolRun {
 	/** A running call's output so far, accumulated from the deltas. Live state. */
 	output?: string;
 	/**
-	 * How many first lines `output` has lost to the reducer's cap, so a reader
+	 * How many first lines `output` has lost to the transcript's cap, so a reader
 	 * of it can tell where its lines sit in the whole.
 	 */
 	outputDroppedLines?: number;
@@ -351,8 +350,8 @@ export interface ToolRun {
 	lostWithProcess?: boolean;
 	/**
 	 * What later calls fetched back of this call's task, oldest first (Claude's
-	 * `TaskOutput`). Derived from persisted `tool_result` records, unlike
-	 * `activity` and `output`, so a replayed run still has it.
+	 * `TaskOutput`). Persisted, unlike `activity` and `output`, so a run read
+	 * from history still has it.
 	 *
 	 * Kept apart from `result`: that is this call's own outcome, handed to the
 	 * agent when the call returned, while a fetch is a second call reading the
@@ -362,8 +361,7 @@ export interface ToolRun {
 	fetches?: ToolFetch[];
 	/**
 	 * The plan this call left, from the `plan` record its result produced
-	 * (Claude's `TodoWrite` and Task tools, Codex's `Plan` row). Derived from a
-	 * persisted record, so a replayed run has it.
+	 * (Claude's `TodoWrite` and Task tools, Codex's `Plan` row).
 	 */
 	plan?: ToolRunPlan;
 	/**
@@ -422,8 +420,7 @@ export interface ToolRun {
 	seenAt?: Date;
 	/**
 	 * A subagent call's own text and calls, in arrival order — the same shape a
-	 * message's content is. Persisted (each record names its parent), so a
-	 * replayed run has them exactly as the live one did. Absent for every call
+	 * message's content is: the items nested in the call's item. Absent for every call
 	 * that is not a subagent's, and for a subagent from a transcript recorded
 	 * before records named their parent (docs/tool-call-model.md#a-subagents-own-conversation).
 	 */
@@ -485,8 +482,8 @@ export interface PermissionReview {
 }
 
 /**
- * How a posted question stands, derived by the reducer from the records that
- * name its `request_id` (docs/answering-ui.md §6).
+ * How a posted question stands, as the server's question item says
+ * (docs/answering-ui.md §6).
  *
  * There is no `expired`: a posted question belongs to the session, not to the
  * process that asked it, so a process ending is not an ending for the question.
@@ -508,8 +505,8 @@ export interface QuestionRecord {
 /** One `thinking` record, as a thinking row draws it. */
 export interface Thought {
 	/**
-	 * Its key within its row, minted with the record's normalized event —
-	 * the object the reducer files as it is. Not its position: a page joining
+	 * Its key within its row: its item's part id (`ChatItems.partIds`). Not its
+	 * position: a page joining
 	 * from above puts the older half's thoughts in front of the newer half's.
 	 */
 	id: string;
@@ -526,7 +523,8 @@ export interface Thought {
  * One piece of an assistant message's content.
  *
  * `id` is the part's identity, which every list keys it by. Minted by the
- * reducer as the part is created, since no record names one for most kinds and
+ * store the first time its item is seen, since an item id is not a key the
+ * list can sort by, and
  * a part must keep its key while the parts around it change: a history page
  * joining from above puts parts in front of it, and an index would hand its DOM
  * and state to whichever part slid into its place. A part rewritten in place
@@ -539,8 +537,9 @@ export type ContentPart = { id: string } & (
 			content: string;
 			/**
 			 * Set only on a subagent's text that could not be filed under its call
-			 * because the call is not loaded; it then sits flat where it arrived.
-			 * Filed children carry none — where they sit already says whose they are.
+			 * because the call is not in the history at all (a fork cut it off); it
+			 * then sits flat where it arrived. Filed children carry none — where
+			 * they sit already says whose they are.
 			 */
 			parentToolUseId?: string;
 	  }
@@ -593,9 +592,8 @@ export type ContentPart = { id: string } & (
 			/** The answer was Always Allow, from its `permission_response` record. */
 			always?: boolean;
 			/**
-			 * The answer's `permission_response` record has been applied. Before
-			 * that an allowed card is a press on its way; after it, an allowed
-			 * card still standing is one whose call's row is drawn elsewhere.
+			 * The server has recorded the answer. Before that an allowed card is a
+			 * press on its way.
 			 */
 			answerRecorded?: boolean;
 			/**
@@ -605,7 +603,7 @@ export type ContentPart = { id: string } & (
 			 */
 			answeredAt?: number;
 			answerSeenAt?: Date;
-			/** Carried over from the unfiled row it took the place of; see `text`. */
+			/** Carried over from the flat row it took the place of; see `text`. */
 			parentToolUseId?: string;
 	  }
 	| {
@@ -702,17 +700,16 @@ export interface UserMessage {
 	createdAt: Date;
 	/**
 	 * The last history record folded into this message, and so the cut point a
-	 * fork anchored here uses. Absent when no record the client saw carries one:
-	 * a record that could not be persisted, or a message this client sent itself
-	 * talking to a server too old to answer `chat.message` with a seq (see
-	 * `MessageResult`). Not history written before seqs existed — replay stamps
-	 * those by position.
+	 * fork anchored here uses: its item's `last_seq`, kept below whatever is
+	 * drawn after it. Absent when no record carries one: a record that could not
+	 * be persisted, or a message this client sent itself talking to a server
+	 * too old to answer `chat.message` with a seq (see `MessageResult`).
 	 */
 	anchorSeq?: HistorySeq;
 	/**
 	 * The server's id for the message record — what a later record names it by
-	 * (`message_discarded`). Not `id`, which is this client's key for the row and
-	 * is made up afresh on every replay. On the sender's echo it arrives with the
+	 * (`message_discarded`). Not `id`, which is this client's key for the row.
+	 * On the sender's echo it arrives with the
 	 * `chat.message` reply; absent until then, and for good when the record could
 	 * not be written or the server is too old to send one.
 	 */
@@ -780,21 +777,24 @@ export interface AssistantMessage {
 	anchorSeq?: HistorySeq;
 	/**
 	 * This bubble was opened by a read point — the agent had just picked up the
-	 * message above it — rather than by content that belonged nowhere else.
-	 *
-	 * Read by `prependHistoryPage` alone, and it exists because a page of history
-	 * can begin at a read point: the page then opens on a bubble no message event
-	 * preceded, which is also the shape of a turn cut in half by the page size,
-	 * and those two must not be joined back together. Nothing renders it.
+	 * message above it — and so continues its turn from the reply above that
+	 * message, rather than starting one: what the turn did is read across both
+	 * (`openTurnReplies`, `turnWork`).
 	 */
 	openedAtReadPoint?: true;
+	/**
+	 * Whatever opened this bubble is on a page not loaded yet: the server said
+	 * its turn goes on above the oldest loaded item (a `continued` stretch), and
+	 * nothing loaded opened it. Gone once that page joins it.
+	 */
+	startNotLoaded?: true;
 	/**
 	 * When this reply began, on the server's clock (epoch ms): the `observed_at`
 	 * of the `message` that opened its turn, or of the read point that opened
 	 * it. History, like a run's `startedAt` — what the reply's span is measured
 	 * from (docs/tool-call-ui.md#where-the-duration-comes-from). Absent when
 	 * nothing measured it: a record from before the stamp, or a reply opened
-	 * without a message (output the CLI resumed by itself, `openedByCard`).
+	 * without a message (output the CLI resumed by itself).
 	 */
 	openedAt?: number;
 	/**
@@ -805,16 +805,6 @@ export interface AssistantMessage {
 	 * page boundary or by a message opening the next turn).
 	 */
 	endedAt?: number;
-	/**
-	 * This bubble was opened by a permission card no turn was open for — a
-	 * background subagent asking after its turn had ended.
-	 *
-	 * Read by `takeStrayCard` alone: when the subagent's call then takes the
-	 * card along into its Process, a bubble that existed only for the card has
-	 * nothing left in it, and left open and empty it would read as a turn still
-	 * running. Nothing renders it.
-	 */
-	openedByCard?: true;
 	/**
 	 * The messages the Stop that ended this turn threw away unread, by their
 	 * `messageId`, in the order the records came. The turn is where the records
@@ -827,9 +817,9 @@ export interface AssistantMessage {
 	 * The main agent's newest call in this turn is a fetch filed under the run
 	 * it reads, still running: the fetch draws no row, so this is what the tail
 	 * line reads to say the turn is waiting, and where its `Go to call` goes
-	 * (docs/turn-progress-ui.md#23-what-it-says). Live state the reducer derives:
-	 * cleared by the fetch's result, by whatever settles it, and by the main
-	 * agent's next text, thinking or call.
+	 * (docs/turn-progress-ui.md#23-what-it-says). Read off the open turn's
+	 * items: gone once the fetch settles, and once the main agent writes,
+	 * thinks or calls again.
 	 */
 	awaitedFetch?: AwaitedFetch;
 }
@@ -1144,6 +1134,12 @@ export interface MessageResult {
 	/** The id the message's record carries; omitted exactly when `seq` is. */
 	message_id?: string;
 	/**
+	 * The message's transcript item id: the sender is left out of the update
+	 * carrying the item, and later updates name the message by this. Omitted
+	 * exactly when `seq` is.
+	 */
+	item_id?: number;
+	/**
 	 * Set when the server wrote the text the agent was sent: the prompt a Pockode
 	 * command expanded to (with `command` as the server parsed it), or the body
 	 * written from a message's `answering`. The `content` its record carries,
@@ -1414,53 +1410,26 @@ export interface ChatMessagesSubscribeParams {
 }
 
 /**
- * One page of history, oldest record first.
- *
- * `next_before_seq` is the cursor for the page before this one and is absent
- * once `has_more` is false. It is the only way to ask for an earlier page: a
- * record the server could not address carries no seq, so a cursor derived from
- * `history[0]` would eventually name nothing. The two fields say the same thing,
- * and the client reads the cursor — the one of them it can act on.
+ * One page of the transcript: its items grouped into turns, oldest first
+ * (docs/agent-chat.md#history-paging). `next_before_seq` is the cursor for the
+ * page before this one, absent once `has_more` is false.
  */
-export interface ChatMessagesHistoryPage {
-	history: unknown[];
-	has_more: boolean;
-	next_before_seq?: HistorySeq;
-	/**
-	 * The server's clock when it built this reply (RFC 3339). What a replayed
-	 * record's `observed_at` is measured against, so a live counter never
-	 * subtracts a server time from this device's clock. Absent from a server
-	 * that predates it.
-	 */
-	server_time?: string;
-}
+export type ChatMessagesHistoryPage = ChatPage;
 
-export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
+export interface ChatMessagesSubscribeResult extends ChatPage {
 	/**
-	 * What the session is doing at the moment of subscribing. The transcript's
-	 * own subscription reports it because the transcript is what it governs — the
-	 * session's settings come from `session.detail.subscribe` instead.
-	 *
-	 * It is what closes out a transcript whose server died mid-stream: a turn
-	 * that is not running says every bubble still `streaming` has stopped, which
-	 * history cannot say on its own (docs/lifecycle-ui.md §2.4).
+	 * What the session is doing at the moment of subscribing. Read for the
+	 * session's turn until `session.detail` reports it; the transcript itself
+	 * is the items'.
 	 */
 	turn: SessionTurn;
 	/**
-	 * What each call still in flight last reported doing, by `tool_use_id`. Not
-	 * in `history`: a `tool_activity` is never recorded, and this is how a client
-	 * that subscribes mid-run — the normal case on a phone — learns what a
-	 * background call that started half an hour ago is up to. Absent when no call
-	 * is in flight; a transcript with none is still correct, because the spinner
-	 * and the badge come from the derived status.
+	 * What is still being generated as of the subscription: the main agent's
+	 * thinking, and what each call in flight has said about itself. Never
+	 * recorded, so a client subscribing mid-run learns it only here; the
+	 * subscription's `chat.delta` notifications continue it.
 	 */
-	tool_activity?: Record<string, string>;
-	/**
-	 * How far each subagent still in flight last reported having come, by its
-	 * call's `tool_use_id`, for the reason `tool_activity` is here. Absent when
-	 * none did.
-	 */
-	tool_progress?: Record<string, Wire.SubagentProgress>;
+	streams?: ChatStreams;
 }
 
 export interface ChatMessagesHistoryParams {
@@ -1470,7 +1439,7 @@ export interface ChatMessagesHistoryParams {
 	limit?: number;
 }
 
-export type ChatMessagesHistoryResult = ChatMessagesHistoryPage;
+export type ChatMessagesHistoryResult = ChatPage;
 
 export interface SessionSetHTMLFirstParams {
 	session_id: string;
@@ -1525,24 +1494,5 @@ export interface SessionEffortsResult {
 	efforts: AgentEfforts;
 }
 
-/**
- * The params of a `chat.<type>` notification once the subscription id is taken
- * off: the event as the server wrote it, and the seq of its record when it has
- * one (`readHistorySeq`). The shapes are generated from the server's Go types
- * (`wire.generated.ts`); a history page's entries are the same records.
- */
-export type ServerNotification = Wire.WireEvent & { seq?: HistorySeq };
-
-/**
- * `chat.resync`: the server could not queue a record for this subscription, so
- * its stream has a hole here. Everything before it arrived in order and without
- * gaps, and nothing more will arrive on this subscription id. The only recovery
- * is a fresh subscribe, whose snapshot covers whatever the hole lost. Never a
- * wire event type — the server holds that apart.
- */
-export interface ChatResyncNotification {
-	type: "resync";
-}
-
 /** Everything a chat subscription's callback can receive. */
-export type ChatNotification = ServerNotification | ChatResyncNotification;
+export type { ChatNotification } from "./chatItems";

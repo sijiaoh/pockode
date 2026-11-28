@@ -698,8 +698,9 @@ An implementation returns `*BinaryNotFoundError` (not installed), `*OneShotAuthE
 
 An event is serialized as an `agent.Wire`, and every `Wire` is exactly one of
 two kinds:
-- **`agent.Record`** — one line of `history.jsonl`, and the params of the
-  `chat.<type>` notification that announces it. One struct per record type
+- **`agent.Record`** — one line of `history.jsonl`, which a client never
+  receives as such: pages and live updates carry the projection's items it is
+  folded into ([agent-chat.md](../agent-chat.md#live-updates)). One struct per record type
   (`TextRecord`, `ToolCallRecord`, … and the read-only legacy
   `AskUserQuestionRecord` / `QuestionResponseRecord`), each holding only that
   type's fields.
@@ -721,13 +722,11 @@ server from before the split reads what this one writes, and the other way
 round. `agent/history_compat_test.go` freezes that flat struct
 (`legacyEventRecord`) and holds every type in `WireTypes` to it.
 
-**Replay does not go through these types.** A history page hands the client the
-line as it is on disk — replay puts the record's `seq` in front, drops the
-line's format version and turn and changes nothing else, because
-`session.stampHistorySeq` splices bytes rather than decoding the record
-(`TestStampHistorySeq_KeepsFieldsThisBuildHasNoNameFor`) — so a field a newer
-server wrote reaches the client even through a build that has no name for it.
-The types are the source of truth for what Pockode *writes*, and for what Go
+**A history page is not made of these types.** It carries the history
+projection's items ([agent-chat.md](../agent-chat.md#history-paging)), which
+are built from records decoded through them: a field a record type has no name
+for — one a newer server wrote — does not reach a page served by this build.
+The types are the source of truth for what Pockode *writes* and for what Go
 reads back.
 
 Every moment on a record (`AskedAt`, `ResolvedAt`, `ObservedAt`) is a pointer,
@@ -862,8 +861,9 @@ subagent's placeholder names only `agent_id`; its `background_result` carries
 the whole report, from `task_notification`'s `usage` plus the type and id the
 adapter kept from `task_started` and the placeholder. While it runs, the same
 counters travel live as `subagent_progress` on `tool_activity` (`tool_uses`,
-`total_tokens`, `last_tool_name`), which is never recorded; the process keeps
-the newest for a mid-run subscriber as `tool_progress` beside `tool_activity`.
+`total_tokens`, `last_tool_name`), which is never recorded; the chat watcher
+keeps the newest for a mid-run subscriber in the call's live stream
+(`streams.tools[…].subagent_progress`, [agent-chat.md](../agent-chat.md#live-updates)).
 Live and final are the CLI's one counter both times — a subagent that made
 three calls reported `tool_uses` 1, 2, 3 live and 3 on its notification and its
 hand-back — kept as the engine's own account; which number a row draws is the
@@ -960,17 +960,23 @@ and runs this test with `-count=1`: the test cache it restores does not watch a
 file outside the module, so a hand edit alone would otherwise replay an old
 pass. Regenerate with
 `cd server && UPDATE_WIRE_TYPES=1 go test ./agent/wirets`, then type-check the
-web client: what stops compiling is what the change asks of it.
-`normalizeEvent` switches over `WireEvent` with a `never` check in its default,
-so a new record type fails `tsc` until the reducer handles it.
+web client: what stops compiling is what the change asks of it. The client no
+longer reads records themselves — it is sent the projection's items
+([agent-chat.md](../agent-chat.md#history-paging)) — so what it takes from this
+file is the payloads those items nest (an answer, a permission update, an
+account mark); the page, update and delta shapes around them are hand-written
+in `web/src/types/chatItems.ts`, mirroring `server/projection`, which this
+generator does not cover. A field added to an item has to be added there by
+hand.
 
 The generated types say what this server writes, not what every line on disk
 holds: a record from an older build may lack a field the type requires
 (`profile_id` on an account mark) or carry a value no constant names
 (`origin: "work"`), and a value the server hands through from a CLI unchecked —
 a plan step's status, a permission suggestion — may be one no constant names
-either. `normalizeEvent` is where both are
-settled, which is why it still checks closed sets rather than trusting them.
+either. The projection normalizes the legacy shapes as it reads history, and
+the client's transcript (`web/src/lib/transcript.ts`) still checks closed sets
+as it reads items rather than trusting them.
 
 ## Content Blocks and Attachments
 
@@ -4777,8 +4783,8 @@ only be withdrawn deliberately.
 
 **The record is Pockode's own, and it has to be.** The CLI is killed with
 SIGKILL, so its transcript may not hold even the frame that raised the request;
-and without a record, a client paging back through history would replay the card
-as still pending long after nothing could decide it. The turn state alone cannot
+and without a record, the projection would leave the card pending, on every
+page and every reload, long after nothing could decide it. The turn state alone cannot
 cover it either — it says which requests are still live, not what became of the
 others.
 
@@ -5234,12 +5240,13 @@ is what a reload shows too, since it is in history either way.
 
 **Naming a record.** A client that needs to point at one record — paging back
 and forking so far — quotes back a `session.HistorySeq`. The server hands the
-number out, on replayed history (`stampHistorySeq`) and on every `chat.*`
-notification of a persisted event alike, and the client only ever reads it back.
+number out on every item (its first and newest record's, `seq` and
+`last_seq`), on a history page and in a `chat.update` alike, and the client
+only ever reads it back.
 
 **Counting records client-side is the trap the number exists to close.** Not
-every record reaches every client as a notification: the tab that sent a message
-is left out of that message's broadcast, and a record written before a client
+every record reaches every client as an update: the tab that sent a message
+is left out of that message's item, and a record written before a client
 subscribed (or while it was reconnecting) reaches it only on a history page. A
 client's own counter would drift by one for each — silently, and a fork would
 then cut somewhere the user never chose. The seqs a client knows can be sparse
@@ -5260,7 +5267,7 @@ honestly observed.
 Seqs are unique and increasing within a session, but not dense. Appends are not
 fsynced, so a power loss can drop a tail whose seqs clients were already told,
 and the counter, seeded from what survived on disk, hands them out again. Paging
-(`PageHistory`'s `before_seq`) and fork anchors (`FindHistorySeq`) therefore go
+(`projection.Projection.Page`'s `before_seq`) and fork anchors (`FindHistorySeq`) therefore go
 by the stored numbers, never by position, and a `before_seq` inside a gap still
 means "older than this". Telling a reused seq from the one a client saw is the
 wire's job, not the file's: a power loss always comes with a restart, and the
@@ -5420,22 +5427,23 @@ the one place it is derived from records. Before it, each reader replayed the
 records its own way; the server's read-backs now read it instead — the fork's
 unanswered questions and open turn (a fold of the copy alone), the plan seed a
 resumed process starts its Task fold from, and what became of a question a
-refused answer names. The web reducer is still a replay of its own.
+refused answer names, every chat page and every live chat update. The web
+client reads the items and derives none of it again
+([frontend-state.md](frontend-state.md#the-transcript)).
 
-**What still reads the file whole, and why.** Every chat page and every
-subscription's first page — `chat.messages.history`, `session_view.history`,
-`ChatMessagesWatcher.Subscribe` — reads the whole of `history.jsonl` through
-`GetHistory` on each request and cuts its page out of that. The wire sends the
-raw records themselves, and the projection holds state, not records, so it has
-nothing to page. Serving those pages without the file would mean keeping the
-records beside the projection, which would hold every active session's
-history twice over in memory, or a seq-to-offset index, which would have to repeat
-`ReadJSONL`'s rules for damaged lines. Neither is worth building while the wire
-still carries records: this stays as it is until the wire carries the
-projection's items instead and is served from them. A fork reads the file too,
-but for a different reason: it copies the records it cuts, so it needs them.
-`FileStore` counting a session's seqs on its first append is the store's own
-bookkeeping, not a read-back of state.
+**Chat pages are cut from it.** Every chat page and every subscription's
+first page — `chat.messages.history`, `session_view.history`,
+`ChatMessagesWatcher.Subscribe` — is a page of the projection's transcript
+(`Source.Page`), so a session somebody has open is paged without reading
+`history.jsonl` again; the wire shape is in
+[agent-chat.md](../agent-chat.md#history-paging). While the wire carried raw
+records, each of those requests read the whole file and cut its page out of
+it: the projection held state, not records, and keeping the records beside it
+would have held every active session's history twice over. Items are state,
+so there is nothing beside it to keep. A fork still reads the file, for a
+different reason: it copies the records it cuts, so it needs them. `FileStore`
+counting a session's seqs on its first append is the store's own bookkeeping,
+not a read-back of state.
 
 - **A pure fold.** `projection.Fold(records, agentType)` folds a history,
   `Append` folds what is written after it, and `State` is what the records say
@@ -5468,7 +5476,7 @@ bookkeeping, not a read-back of state.
 - **Legacy shapes are read once, where records enter.** `normalize` turns each
   record into facts in today's shape, and nothing past it knows an old shape
   existed: origin `work` is `system` (carried on the message for the readers
-  of messages still to come; no `State` field exposes messages yet); an
+  of messages, the transcript's message items); an
   `ask_user_question` is one legacy question per entry under its request id,
   answered by a `question_response`'s flat map (labels joined by `", "`, free text behind `"Other: "`, a null map
   being the CLI's cancellation) and never on the unanswered list, since nothing
@@ -5518,6 +5526,78 @@ bookkeeping, not a read-back of state.
   their origin, rather than being absorbed into it as the client draws them;
   a Codex plan with no call (`plan_id`) is the session's plan, not a run; and
   the CLI's legacy `ask_user_question` is a question, not its tool row.
+- **The transcript is everything a chat draws, as items.** Beside the state,
+  the fold keeps an ordered list of entries (`transcript.go`): one per tool
+  run and per question — their state is the projection's own — and one per
+  record that is an item by itself (a message, text, thinking, a read point, a
+  plan filed on no call, a system line, a warning, an error, raw or command
+  output). Each counts the records that named it and keeps the newest one's
+  seq. An entry belongs to the turn its record is tagged with; a message,
+  never tagged, to the turn open when it was sent, or to the turn whose
+  `turn_started` names it as the opener. `Page` cuts from it (`page.go`):
+  - **A subagent's work is inside its call.** An entry naming a parent call the
+    history holds is not listed at the top level but in that call's
+    `children`, at any depth, so a page holds a run together with its nested
+    work however the records interleaved — a backgrounded subagent writing
+    between the main agent's lines for several turns included. Whether an
+    entry is nested is read when the page is cut, not when the entry is filed,
+    so a call recorded before its parent is adopted once the parent arrives,
+    as the item's own `Children` are. An item is never split across pages, so
+    a call and its work always arrive together.
+  - **The budget is records, the unit is items.** A page lists the newest
+    top-level items until the records that went into them, nested work
+    included, reach the limit, and ends on the item that spends it — so a
+    page weighs about what the record pages it replaced did, and an item larger
+    than the budget comes whole rather than not at all. An item's place is its
+    first record's seq, which is what the cursor names; an item in no file
+    takes the place of the numbered record before it and is never a page's
+    first, as its cursor would name nothing.
+  - **A turn's stretches name the whole turn.** Consecutive items of one turn
+    are one stretch carrying the turn as it stands now, with `continued` when
+    the boundary cut it; an item outside every turn is in a stretch with
+    none.
+  - **Cut under the session's lock, without copying the state.** `Live.Page`
+    builds the page from the projection it keeps, so a page costs the items it
+    holds — the accessor of its own that `State`'s O(history) copy called
+    for. Only a history ending on a message waiting on the record after it is
+    read on a copy, as `State` reads one.
+
+  `TestFold_AnyPrefix` holds the newest page to the same rule as the state:
+  folding a prefix and appending the rest gives the page folding everything
+  does, and a page already cut does not change as the fold goes on.
+- **Live updates are what each record changed.** `Live` tracks what each record folded changes (`TrackChanges`, from its load): the
+  entries a record named, and the ones moved without being named — settled by
+  a turn's cut-off or a process's end, adopted by a parent that arrived after
+  them, taken into the turn their message opened — with the turns and the
+  plan. `TakeUpdate` renders those as items and starts over; the chat watcher
+  takes one after every record it is handed (`update.go`, wire shape in
+  [agent-chat.md](../agent-chat.md#live-updates)). Each item goes out on its
+  own, a run without its children and with the runs it is nested in, so a
+  record inside a long subagent run costs that record's items, not the run.
+  That includes the run's `last_seq`, which counts its whole subtree: each
+  entry keeps its subtree's newest seq (`subtreeLast`), raised along the runs
+  it is nested in as a record names it or it is nested, so sending a run
+  costs its depth. Walked instead, the subtree made every record cost what
+  the run had grown to — about 35 µs with the 53k-record long session's
+  subagent at a few hundred calls, 100 µs and 160 KB once it had 10k
+  (`go test ./projection -bench LongSession`).
+  An item's `id` is its entry's place in the transcript, which a fold of the
+  same history gives the same entry every time; that is what lets a page and
+  an update name one item alike. `TestUpdate_KeepsAPageCurrent` holds a page
+  cut after any prefix, with every update after it applied, to the page cut at
+  the end. Two consequences:
+  - **A message is folded as it is written.** A message is untagged in every
+    version, so reading a file the fold holds it until the record after it
+    says which version wrote it (`agent.TurnInference`). A record `Live` is
+    told of was written by this version, so it is folded at once
+    (`AppendWritten`) and its update goes out with it, not with whatever the
+    agent writes next. The two readings part only while a history is nothing
+    but messages, which the file cannot date: there the file's reading opens a
+    `legacy-` turn the live one does not.
+  - **A projection let go while held breaks the updates.** A replaced history,
+    a changed agent type: what changed between the last update and the
+    re-read is in no update, so `TakeUpdate` reports itself not continuous
+    once, and the watcher sends the session's subscribers `chat.resync`.
 - **Turn ids are per session.** A fork's copy keeps its source's ids, so a
   projection is one session's and nothing is keyed across sessions.
 - **Held live beside the store that writes it, for active sessions only.**
@@ -5531,10 +5611,19 @@ bookkeeping, not a read-back of state.
   counted, so the process and a viewer, or two processes overlapping across a
   replacement, keep one projection. A held session is folded from the file the
   first time its `State` is asked for, and from then on each record is folded
-  as it is appended; the last release lets it go. A read of a session nobody
-  holds folds the file and keeps nothing, as `FromReader` does — that is the
-  re-fold after release, and the price of an idle session's rare read (a
-  refusal's wording, say).
+  as it is appended. The last release does not let it go at once: it
+  *lingers* (`projection.DefaultLinger`, two minutes), held by a timer of its
+  own and kept current like any held projection, and a read of a session
+  nobody holds starts the same linger; each read pushes its end back. A long
+  history folds in tens of milliseconds — 300 turns, 53k records, about 85 ms
+  — where a page of a kept projection is cut in about 0.1 ms, and without the
+  linger a reconnect, the chat reopened, or every page asked for without a
+  subscription paid the whole fold again (the file read and page cut it
+  replaced were 14–27 ms). A linger adds sessions read in the last two
+  minutes to what is kept, which the bound below leaves room for. Only a
+  holder other than the linger makes a dropped projection a break
+  (`TakeUpdate`'s `continuous`): a lingering one has nobody keeping a copy
+  current from updates.
 
   The bound is the point: an item keeps its call's whole input and its newest
   result's text, which the client is to be served from, so a projection weighs
@@ -5545,7 +5634,12 @@ bookkeeping, not a read-back of state.
   server runs; kept for active sessions, even the largest costs about 1% of
   the CLI process that makes it active (a Claude CLI runs at 370–410 MB
   resident), the median about 0.04%, so there is no further cap, LRU or
-  otherwise. Nothing is trimmed from items to save memory.
+  otherwise. The linger keeps it that way only because every read of a
+  session nobody holds is somebody's request — a subscribe, a page, a send's
+  item id, a refusal's wording — or a process starting, never a sweep over
+  sessions: what lingers is what was touched in the last two minutes. A
+  reader that visits sessions in bulk would keep them all; it needs a read
+  that does not linger, which `Live` does not offer today. Nothing is trimmed from items to save memory.
 
   The store reports every write to a `session.HistoryObserver` under the
   session's history lock, after the write reached the file and before
@@ -5574,16 +5668,31 @@ bookkeeping, not a read-back of state.
   so it costs O(history) and briefly holds up that session's next append; a
   reader that grows hot wants an accessor of its own on `Live` rather than
   more `State` calls.
-- **Read-only views fold on each read.** `projection.FromReader` over a
-  `session.DirReader` folds the file every call and keeps nothing — for the
-  reason `DirReader` keeps no cache. Both it and `Live` are a
-  `projection.Source`. No reader of an unloaded worktree uses it yet; it is
-  there so that one moving off the file serves both kinds of worktree, as
-  `session.Reader` does. It reads the history as the file has it: a run
-  that ended unseen has no `process_ended` until a server holding the worktree
-  repairs it ([Restart Repair](#restart-repair)), so its turn reads open here
-  while `DirReader.List` — which normalizes the stored turn state
-  (`NormalizeTurn`) — reads it closed.
+- **Read-only views are kept while the file stays as it was.** A worktree
+  that is not loaded has no `Live`: nothing here writes its directory, so no
+  observer hears of a write, and anything else that may write it is not this
+  server. `session_view.history` reads such a session through
+  `worktree.Manager.SessionProjections`, which hands out a
+  `projection.Folds` source over a `session.DirReader`. Folding the file per
+  page, as it first did, cost the long session above about 87 ms a page; kept,
+  a page costs a stat, an index read and the cut, about 0.12 ms. What makes
+  keeping it safe is checking it: each read takes the history file's version
+  (`session.HistoryVersion` — the file's identity, size and modification time)
+  *before* reading, and folds the file again whenever the version differs from
+  the one the kept fold came from. That is enough because a history changes
+  only by appends, which grow the file, and by whole rewrites renamed into
+  place, which make it another file; taking the version first means a write
+  racing the read leaves a fold newer than its version, folded again next
+  time, never one older. What is kept is bounded as `Live`'s linger is, by
+  the same `DefaultLinger` pushed back on every read, and for the same reason
+  — every read is somebody's request. One `Folds` per `worktree.Manager`,
+  keyed by the history file, so the many short-lived sources it hands out
+  share it. `projection.FromReader` is the same source with nothing kept, for
+  tests and callers that read once. Both read the history as the file has
+  it: a run that ended unseen has no `process_ended` until a server holding
+  the worktree repairs it ([Restart Repair](#restart-repair)), so its turn
+  reads open here while `DirReader.List` — which normalizes the stored turn
+  state (`NormalizeTurn`) — reads it closed.
 
 ### The Session Index
 

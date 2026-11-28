@@ -7,8 +7,8 @@
 // stored line holds: a record from an older build may lack a field, and a
 // value a CLI hands through unchecked (a plan step's status, a permission
 // suggestion) may be one no constant names. Convert to the client's own types,
-// checking those, where the records are read (lib/messageReducer.ts
-// normalizeEvent) — never by editing this file.
+// checking those, where the transcript items are read (lib/transcript.ts) —
+// never by editing this file.
 
 /**
  * TextRecord is what the agent wrote.
@@ -543,8 +543,7 @@ export interface ThinkingDeltaLiveEvent {
 }
 
 /**
- * Every record a session's history holds: what a history page and a
- * persisted `chat.<type>` notification carry.
+ * Every record a session's history holds, as history.jsonl stores it.
  */
 export type HistoryRecord =
 	| TextRecord
@@ -573,14 +572,13 @@ export type HistoryRecord =
 	| TurnStartedRecord;
 
 /**
- * Every event that is broadcast and never stored: never in a history page,
+ * Every event that is broadcast and never stored: never in history,
  * never with a seq.
  */
 export type LiveEvent = ToolActivityLiveEvent | ThinkingDeltaLiveEvent;
 
 /**
- * Everything a `chat.<type>` notification can carry, discriminated by
- * `type`.
+ * Every event an agent.Wire can be, discriminated by `type`.
  */
 export type WireEvent = HistoryRecord | LiveEvent;
 
@@ -1055,8 +1053,8 @@ export type TurnOrigin = "prompt" | "output" | "answer";
 
 /**
  * SubagentProgress is how far a running subagent has come. Live state: it
- * travels on tool_activity, which is never recorded, and the process keeps the
- * newest for a client that subscribes mid-run.
+ * travels on tool_activity, which is never recorded, and the chat watcher keeps
+ * the newest for a client that subscribes mid-run (rpc.ChatStreams).
  */
 export interface SubagentProgress {
 	/**

@@ -1,6 +1,6 @@
 # Frontend State Management
 
-Pockode uses Zustand for state management, pure reducers for event processing, and a registry pattern for runtime extensibility. This document explains why these patterns were chosen.
+Pockode uses Zustand for state management, an item store and a pure presentation pass for the chat transcript, and a registry pattern for runtime extensibility. This document explains why these patterns were chosen.
 
 ## Architecture Overview
 
@@ -568,18 +568,83 @@ answer, not one per list. It does: *nothing has answered yet* is exactly
 that did arrive is still kept when the other one failed; losing it would punish
 the working half for the broken one.
 
-## Message Reducer
+## The Transcript
 
-`messageReducer.ts` is a pure function (not a store) that transforms server events into message state. This separation enables history replay, unit testing, and flexible composition.
+The server sends the transcript as items — pages of them, then an update per
+record that changed any — each complete as it stands
+([agent-chat.md](../agent-chat.md#history-paging)). Everything about what an
+item *is* is the server's: a call's status, its permission request and answer,
+its result and background outcome, a question's fate, a turn's start and
+ending, which messages a Stop threw away, what a subagent did under its call.
+The client derives none of it again. What it decides is how to draw it, and
+that is two pieces:
+
+- **`ChatItems`** (`web/src/lib/chatItems.ts`) holds the items as the server
+  last stated them, by id, with the turns, the live streams of calls in flight,
+  this client's own sends until the transcript has them, and presses on
+  permission cards the server has not recorded yet. It derives nothing.
+- **`buildTranscript`** (`web/src/lib/transcript.ts`) turns that into the
+  `Message[]` the chat renders — bubbles, rows, cards — and is the only author
+  of every `Message`, `ContentPart` and `ToolRun`. A renderer reads what it is
+  given and infers nothing of its own.
+
+The wire shapes are hand-written in `web/src/types/chatItems.ts`, mirroring
+`server/projection/page.go` and `update.go`, which the record type generator
+does not cover; the record payloads they nest come from `wire.generated.ts`.
 
 ### Data Flow
 
 ```
-ServerNotification (snake_case, generated from Go: types/wire.generated.ts)
-  → normalizeEvent() → NormalizedEvent (camelCase)
-    → applyServerEvent() → Message[]
-      → Component state (via useSubscription hook)
+chat.messages.subscribe / chat.messages.history / session_view.history → ChatPage
+chat.update → ChatUpdate        chat.delta → ChatDelta        chat.resync
+  → useChatMessages → ChatItems (installNewestPage / addOlderPage / applyUpdate / applyToolDelta)
+    → buildTranscript(store, cache) → Message[] → MessageList
 ```
+
+`ChatItems` is mutable and owned by one `useChatMessages`; every change goes
+through its functions, which replace each changed node — and every run above
+it — rather than editing one in place, and the hook then commits a rebuild. A
+node's identity is therefore its version. That is what makes the rebuild
+cheap: the transcript is cut into **stretches**, runs of top-level items of one
+turn, and a stretch whose nodes, turn and neighbours are the same objects as
+last time comes back as the same messages (`TranscriptCache`). A record
+re-renders the bubble it touched and nothing else, which is what React.memo on
+the rows relies on and what `transcriptMemo` keys on
+([below](#transcript-wide-facts)).
+
+Finding those stretches does not walk the transcript either. The store notes
+the smallest top-level id whose row it changed since the transcript last
+looked (`takeRowsChangedFrom`), and a build keeps the last build's stretches
+that lie wholly before it — all but the one just before, which the changed
+row may have joined — walking only from there. A record lands near the end,
+so its rebuild costs the last turn or two, not the 21k rows of the
+benchmark's long session: walked whole, that was 0.3 ms a record in Node and
+2–3 ms in a profiled production build; now it is 0.03 ms and 0.4–0.6 ms.
+A send of this client's own drawn as an echo changes rows without the store
+marking one, so a stretch is kept only if it lies wholly before every echo row
+of this build and the last; sends go at the end, so that still keeps all but
+the newest few, and a send left failed and unrecorded does not make every
+later build walk everything.
+
+Reading a page or an update is a matter of filing:
+
+- **The subscription's page replaces everything.** A re-subscribe — a
+  reconnect, or `chat.resync` — starts the store over from the new snapshot;
+  only this client's sends still waiting on a reply, and the part ids, carry
+  over, so nothing that did not change remounts.
+- **An older page goes in front.** An item already held keeps the newer
+  account; a turn already held is replaced only by one that knows its ending.
+- **An update upserts.** Its turns first, then its items in order, each
+  replacing the held copy whole and keeping its children (an update never
+  carries them). An item can move: a call recorded before its subagent call
+  goes under it when that arrives, and the message that opened a turn goes
+  into it. An update whose `through_seq` the page already reached is skipped,
+  but its `streams_ended` is applied, since the stream snapshot does not know
+  of it.
+- **An item the client never loaded is not new.** An upsert for an id it does
+  not hold, older than the oldest loaded item while older pages remain — a
+  backgrounded call reporting from a page above — is dropped; that page will
+  bring the item as it then stands.
 
 ### Message Variants
 
@@ -600,65 +665,43 @@ through that predicate. The fork menu deliberately does not: a fork cuts around
 anything that entered the conversation, whoever supplied it, which is the line
 the server draws too (`chat.isUserMessageRecord`).
 
-The consequence to know before touching the reducer: **`status` is not a common
-field.** Only assistant messages carry one, so anything asking about it has to
-narrow on `role === "assistant"` first.
+**`status` is not a common field.** Only assistant messages carry one, so
+anything asking about it has to narrow on `role === "assistant"` first.
 
-### Turn Boundaries and Late Events
+### Bubbles
 
-A turn starts from a `message` event and ends on `done` / `interrupted` /
-`error` / `process_ended`, leaving its message at the matching status
-(`complete` for `done`). Every prompt is persisted and broadcast by the
-server, so the client always sees the `message` that opens a turn — and a turn
-cut short takes its pending permission requests down with it, so no answer can
-resume it either. That makes the rule for content arriving after an ending
-unambiguous: it belongs to the turn that just ended.
+A turn is its opening message and the reply under it. The reply's status is
+the turn's: `streaming` while the newest turn is open, and once it has ended,
+what ended it — `ended_by` says `done`, `interrupted`, `process_ended` or a
+failure, with the turn's `error` item's text on the bubble. A turn not ended
+that is not the newest is drawn finished; its process went away without a
+record, and only the newest can still be running. A transcript read out of
+another worktree (`useViewedSession`) is never continued, so an open turn there
+is drawn finished too.
 
-These are the client's own boundaries, read off the records around them. The
-server now records each turn's id and its `turn_started`
-([agent-integration.md](agent-integration.md#turn-identity)), but replay does
-not send the tag and the reducer draws nothing for `turn_started`, so the client
-does not read turns off them yet. The two readings can differ: Claude text
-after an `interrupted` opens a turn on the server (a tool result does not),
-while the client appends it to the stopped bubble.
+**A message sent into a running turn is drawn under the reply that was being
+written**, not where its item sits among the turn's items: the reply above it
+keeps growing until the agent *reads* the message, and splits there, at the
+`read` item ([agent-integration.md](agent-integration.md#the-read-point)). One
+turn has one ending, but not one bubble. A bubble opened at a read point carries
+`openedAtReadPoint`, which is how `openTurnReplies` reads the turn's work
+across both halves. Messages nobody read — a Stop discarded them —
+go under the turn's last bubble, where the Stop's summary is drawn. Output
+tagged with a turn after the next one started (a Codex straggler) is a stretch
+of its own after that turn's, drawn as a finished bubble; only the turn's main
+stretch carries its ending.
 
-A posted question is deliberately **not** taken down with it. It belongs to the
-session rather than to the turn, so it is still waiting when the next process
-starts — and it never held this turn open in the first place
-([answering-ui.md §6](../answering-ui.md#6-the-record-card-in-the-stream)).
+An empty bubble is kept only while it says something: an open turn's reply not
+written yet (it carries the tail line), and a turn that ended badly or threw
+messages away with nothing written. A finished turn that produced nothing draws
+no box.
 
-That matters because the CLI keeps talking for a moment after a turn is cut
-short — a Task subagent's last output is the usual source. A subagent's records
-name their call and are filed under it, wherever it is
-([below](#a-subagents-children)); anything else is appended to the ended
-message and leaves its status alone; without that it
-would open a fresh `streaming` bubble under a turn the user has already stopped.
-The composer no longer infers liveness from it — `turnOpen` reads the session's
-own turn ([lifecycle-ui.md](../lifecycle-ui.md#23-chat-composer-and-stop)) — but
-the transcript still shows what it is given, and two bubbles for one turn is a
-transcript that disagrees with itself about when the turn ended.
-
-Both of those questions — which bubble is this turn writing into, and has the turn
-ended — used to be answered by reading the last message, and **neither can be any
-more.** A message may be sent into a turn that is already running, and it is
-appended *below* the reply being written
-([lifecycle-ui.md §2.3](../lifecycle-ui.md#23-chat-composer-and-stop)), so the last
-element is routinely not the open bubble — nor even the last assistant bubble, since
-a send the server refuses leaves its reason underneath as well. Both therefore scan
-backwards: `openAssistantIndex` for the bubble an open turn is writing into (the last
-assistant still `sending` or `streaming`), and the last assistant of any status for
-whether the turn *ended*, which is what the lateness rule above tests. At most one
-bubble is ever open — a turn opens one only when `openAssistantIndex` finds none — so
-scanning past closed ones cannot pick the wrong turn.
-
-`openAssistantIndex` answers one more question that used to be read off position:
-which bubble carries the tail line ([turn-progress-ui.md](../turn-progress-ui.md#2-the-tail-line)).
-`MessageList` computes it once and hands each row `isOpenTurn`, replacing an
-`isLast` that agreed with it only until a message could land underneath the reply
-it went into — after which the reply still being written was no longer last, and
-lost its line at the moment the user had just asked it something. The bubbles that
-are *not* the open turn still show nothing, which is what keeps a reply the turn
-has moved on from claiming to be running.
+Which bubble the open turn is writing into is `openAssistantIndex` — the last
+assistant still `sending` or `streaming` — and never position: a message sent
+mid-turn sits below the reply still being written, and a send the server
+refuses leaves its reason under the message. `MessageList` computes it once and
+hands each row `isOpenTurn`, which is what carries the tail line
+([turn-progress-ui.md](../turn-progress-ui.md#2-the-tail-line)).
 
 What the line *says* does not come through the bubble's props: the turn's phase,
 its clock and what the main agent is thinking right now reach it through
@@ -666,28 +709,23 @@ its clock and what the main agent is thinking right now reach it through
 one line rather than every memoized bubble. The plan and the agents in it come
 the same way, with the id of the one bubble that draws them
 ([turn-progress-ui.md §4.3](../turn-progress-ui.md#43-the-agents), *where
-the plan and the agents are derived and drawn*). "Thinking now" is `useChatMessages`
-state beside the transcript, never a part of it — `thinking_delta` is not
-recorded, so it is dropped by the reducer and folded per frame into that state
-instead. What ends it is
-[turn-progress-ui.md §2.3](../turn-progress-ui.md#23-what-it-says)'s rule: the
-thinking's record, the main agent's next text or tool call (a Codex `plan`
-included), or the turn ending
-however it ends. If the user had opened the line, the row its
-record settles into opens too: the hook finds that part by the record's
-`Thought` object — which the reducer stores as it is, so neither position nor
-React batching the record with the text after it can mislead the search — and
-adds its id to `openedThoughtIds`, which `RowList` reads through
-`OpenedThoughtsContext` as that row's first choice. It is done in a layout
-effect, so the row is never painted closed first.
+the plan and the agents are derived and drawn*). "Thinking now" is
+`useChatMessages` state beside the transcript, never a part of it: the
+subscription's `streams.thinking` and the `chat.delta`s that continue it,
+folded per frame. It ends where the server says the stream ended
+(`streams_ended.thinking`), or with the turn. If the user had the line open,
+the row the thinking settles into opens too: the update that ends the stream
+brings the thinking item, and the hook adds its part id to `openedThoughtIds` in
+the same render as the row, which `RowList` reads through
+`OpenedThoughtsContext` as that row's first choice.
 
 Being a context is not enough on its own once the transcript is long. When a
 plain context's value changes, React walks the whole tree under its provider
 looking for readers, through every memoized bubble that bails out. On a
 300-turn session that walk cost 20–40 ms for each record a subagent wrote,
 because the agents in the tail change with every one of them. So the contexts
-whose value changes while a turn streams — `TurnTailContext`,
-`UnfiledChildrenContext` and `SubagentResumesContext` — are built with
+whose value changes while a turn streams — `TurnTailContext`
+and `SubagentResumesContext` — are built with
 `createSelectableContext` (`web/src/components/Chat/selectableContext.tsx`).
 The context itself carries one object that never changes. The value reaches
 readers through a subscription, and each reader selects its own slice:
@@ -712,350 +750,162 @@ becomes the `offsetParent` of everything inside it, so a row's place in what
 scrolls has to be measured with `getBoundingClientRect` against the scroller
 (`VirtualLines` already does).
 
-That search is also what leaves only two things able to close a bubble: the turn's own
-ending, and the read point. A user message arriving underneath used to close it as a
-side effect, and that side effect was quietly doing double duty as a backstop for a
-`done` that never arrived; mid-turn sending had to remove it. A message closes the
-bubble when the *agent reads it* instead — a `message_ingested` record, which is a
-boundary and nothing else: the bubble above is finished where it stood and a fresh one
-opens at the end of the transcript, under the message, for everything written
-afterwards ([agent-integration.md](agent-integration.md#the-read-point)). One turn has
-one ending, but not one bubble; the two facts were conflated for as long as a mid-turn
-message had nowhere of its own to be answered. The record's `message_id` is not used
-to place that bubble — the client that sent the message learns the id the server
-minted for it only from the reply to `chat.message`, which can arrive after the read
-point does, so joining on it would lay out the sending tab differently from every
-other tab and differently again after a refresh, which is the one thing the split must
-keep identical. Records apply in order, so the end of the transcript already *is*
-under the message that was read. With several messages queued into one turn that
-costs adjacency and nothing else: each answer still begins at its own read point,
-below the queue rather than tucked in between the messages in it.
+**A bubble's key survives a page.** A turn's first bubble is keyed by its turn,
+not by its first item, so when an older page brings the front half of a turn
+cut by the page boundary, the half goes into the bubble on screen and the bubble
+stays the same node. That is load-bearing outside the transcript: the reader is
+held still across a page by the first loaded row's bottom edge, which only
+measures what went in above it if the row is the same node before and after
+([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)).
 
-The `done` dependency is therefore still single and explicit
-— without `done` / `interrupted` / `error`, two turns' output grows into one bubble —
-which is why `messageReducer.test.ts` states it as a test of its own rather than
-leaving it a thing everyone assumed. The net that is unchanged, and the one that
-matters in practice, is the subscribe-time settle: `turn` finalises whatever is still
-`streaming` unless the turn is still open
-([lifecycle-ui.md §2.4](../lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
-
-The same lateness decides where a fork can cut. A message carries the `anchorSeq`
-of the last history record folded into it, and the reducer stamps it on the
-newest message only — `applyServerEvent` is the one path both replayed
-history and live notifications take, so the two cannot disagree about where a
-cut lands. A record that lands in an earlier message goes unstamped rather than
-raise that message's anchor past the messages below it, which would quietly move
-the cut past messages the user can see: they point at a bubble, and the fork
-would cut somewhere later than the bubble they pointed at. The client is free
-to leave records unaddressable because it only anchors on ones the server gave it
-a seq for; what it must never do is number them itself, or do arithmetic on the
-numbers it was given — where the cut falls relative to the anchor is the server's
-answer, not the client's ([session-fork-ui.md](../session-fork-ui.md#the-rule),
+**Where a fork can cut** is the `anchorSeq` a message carries: a user message's
+item's `last_seq`; a reply's newest record — its items' `last_seq`, or the
+turn's `end_seq` on its last bubble — kept below the first item drawn after
+it. The cap matters because a call's `last_seq` moves on when its background
+outcome arrives turns later, and because a message drawn under a reply is older
+than the reply's later items: a fork from the reply must not cut past messages
+the user can see below it. The client only compares seqs the server gave it and
+never computes with them — where the cut falls is the server's answer
+([session-fork-ui.md](../session-fork-ui.md#the-rule),
 [agent-integration.md](agent-integration.md#history-storage)).
 
-`complete` is deliberately excluded from that rule: when a background wait runs
-out of budget Pockode delivers the `done` itself
-([agent-integration.md](agent-integration.md#background-waits)), and output
-resuming afterwards is a genuinely live turn.
+### This Client's Own Messages
 
-History arrives one page at a time, so a turn can also be cut in two by a page
-boundary rather than by an ending. The halves are rejoined where the pages meet
-([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)) — unless the
-newer page opens at a read point, which is a cut the reducer made on purpose and
-marks on the bubble (`openedAtReadPoint`) so the seam does not undo it. The joined
-message keeps the newer half's anchor: it names the later record, which is where
-a fork of the joined message has to cut. The older half's anchor stands in only
-when the newer one never got one, a message without an anchor being one the user
-cannot fork from at all.
+The sender is left out of the update carrying its own message
+([agent-chat.md](../agent-chat.md#live-updates)), so a send is drawn from an
+**echo** (`Echo`) until the transcript holds its item. The echo goes where the
+message was sent: after the top-level item that was last at that moment, in
+the turn then open — so a message sent mid-turn is drawn under the reply being
+written, like anybody's — or, sent to an idle agent, with a reply bubble of its
+own (`sending`) at once. A refused send takes the echo back; one that failed
+otherwise leaves it with the failure drawn directly under it.
 
-The joined message keeps the newer half's **id** as well, the bubble being keyed
-on it, and that one is load-bearing outside the reducer: the transcript holds
-the reader still across a page by the first loaded row's bottom edge — the first
-row being the only one a seam can grow older content inside — and that edge
-only measures what went in above it if the row is the same node before and after
-the page ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)). Moving
-the identity to the older half would remount the bubble under the reader, not
-just rename a key.
+The reply to `chat.message` carries the message's `item_id`, and the item is
+written into the store from what was sent and what the reply adds. An update
+can beat the reply — the turn the message opened takes its item in, or a Stop
+discards it — and a message item first heard of from a record after its own is
+this client's: the waiting echo with the same text takes it, or else one of the
+kind that record implies (only a send to an idle agent opens a turn). That is a
+guess the reply can overrule: the item the reply names wins, and an echo that
+guessed it gives it back. A fresh page — a re-subscribe while a send is in
+flight, or after one failed on a dropped connection — is matched the same way,
+against the messages recorded since the transcript last stood, so the page's
+copy and the echo are never both drawn. A send that failed here may still have
+been recorded (a reply lost to a timeout or a dropped connection), and its own
+record can then reach this client over a newer connection; a failed echo
+therefore takes a newly heard-of message item with the same text, and its
+failure is dropped. Several sends keep the order they were
+made in. Either way the item it becomes takes the echo's row keys, its own and
+its reply's, so the bubble the user watched appear is the one that stays.
 
 ### Part Identity
 
 Every `ContentPart` carries an `id`, and so does every `Thought` inside a
-thinking part; every list of either is keyed by it. No record names one for
-most kinds of part, and position cannot stand in: a page joining from above
-puts parts in front of the ones on screen, and an index key would hand each
-row's DOM and state — an open body, a clamp — to whichever part slid into its
-place.
+thinking part; every list of either is keyed by it. Position cannot stand in: a
+page joining from above puts parts in front of the ones on screen, and an index
+key would hand each row's DOM and state — an open body, a clamp — to whichever
+part slid into its place.
 
-- **Minted on the client, as the part is created.** `newPartId`
-  (`lib/partTree.ts`) is called by the reducer wherever it creates a part, so
-  streaming and replay mint the same way; a thought's id is minted in
-  `normalizeEvent` instead, because `useChatMessages` finds a thought's part by
-  the very object the reducer filed ([above](#turn-boundaries-and-late-events)).
-  The id is client state and never enters an event record; two replays of the
-  same records mint different ids, which costs nothing, since a replay
-  rebuilds the bubbles too.
+- **Minted by the store, the first time an item is seen** (`ChatItems.partIds`,
+  `newPartId` in `lib/partTree.ts`), and kept for as long as the store lives,
+  across a re-subscribe too. Not the item id itself: ids name items, while
+  part ids also have to sort.
 - **Ids sort in mint order.** A module counter in base 36, zero-padded to a
   fixed width, so comparing two as strings says which came first. `oldestPart`
   is the only reader of that order — see
   [tool-call-ui.md](../tool-call-ui.md#what-a-list-and-a-group-are-keyed-by)
-  for why a list and a group are named after their oldest member.
-- **A part rewritten in place keeps its id**: appended text, a result, a
-  settled call. **A card that takes a row's place takes the row's id**
-  (`inPlaceOf`) — a permission card, a posted question's card, a legacy
-  `ask_user_question`'s first card — so one place on screen keeps one identity.
-  The row an answered permission card hands its place back to keeps the
-  card's id, which was the row's before the card took it; only a row rebuilt
-  under a card nobody answered is a new part with a new id.
-- **Joining two halves of a turn keeps the newer half's ids.** The newer half
-  is the one on screen; the older half was never drawn, so its ids name
-  nothing yet. `joinTurnParts` still runs text across the seam through the
-  streaming rule, and whatever text part that leaves last takes the newer
-  half's first text id, merged or not; a thinking split across the seam keeps
-  the newer half's id, its thoughts keeping their own.
+  for why a list and a group are named after their oldest member. An item paged
+  in later is minted later, so a list does not change its name when its older
+  members arrive.
+- **A part built from a run of items is named after its first**: consecutive
+  texts, or consecutive thinking. **A card in a row's place takes the row's
+  id** — a permission card is the call's own item; a posted question's card
+  takes the `question_post` row's, a legacy question's first card the ask
+  call's — so one place on screen keeps one identity as the call turns into a
+  card and back.
 
 ### Discarded Messages
 
-A Stop on a Claude turn can throw away messages the agent had not read yet; the
-server records each as `message_discarded` naming the message by `message_id`,
-inside the turn the Stop ended, ahead of its `interrupted`
+A Stop on a Claude turn can throw away messages the agent had not read yet
 ([agent-integration.md](agent-integration.md#stop-ends-the-background-work-too)).
 What the transcript draws from it is in
 [discarded-messages-ui.md](../discarded-messages-ui.md); this is how the state is
 kept.
 
-Unlike the read point, this record can only be joined by id: its position says
-which turn, not which message. The reducer keeps the message's server id on the
-`UserMessage` (`messageId`) and files the record's id on the turn's bubble
-(`discardedMessageIds`) — the bubble the record lands in by the same rule any
-other record of the turn follows. Neither is the ending itself: "this message
-was discarded" is derived on every render by `discardedMessages`, which joins the
-two across the whole loaded transcript. Writing it onto the message when the
-record arrived would be wrong twice over:
+The server says it twice over, and the client keeps both as said: the message's
+item is marked `discarded`, and the turn the Stop ended lists it (`discarded`
+on its stretch and its update), which the turn's last bubble carries as
+`discardedMessageIds`. "This message was discarded" is derived on every render
+by `discardedMessages`, which joins those ids with the messages' `messageId`s
+across the loaded transcript, rather than written onto the message: the turn
+can be loaded a page before the message it names.
 
-- **The sender learns its id late.** Its own echo has no `messageId` until the
-  `chat.message` reply brings one, and a Stop pressed before that reply lands
-  delivers the record first. Looking the bubble up once, at arrival, would lose
-  the ending on exactly the tab that pressed Stop.
-- **Pages arrive newest first.** The turn's record can be loaded a page before
-  the message it names; the message joins the answer when its page does.
-
-A bubble holding discarded ids is not an empty placeholder even with no parts:
-the end of the turn is where the Stop's summary is drawn, and the page join
-carries the older half's ids into the merged bubble for the same reason.
-
-A posted question's card is read the same way. `applyAnswering` keeps the
-answering message's id on the card (`answerMessageId`), and the card reads
-`Not read` when that id is in the derived set
-([answering-ui.md](../answering-ui.md#6-the-record-card-in-the-stream)). What
-the reducer does decide from records alone is that a later answer or a
-withdrawal takes an answered card over: the server takes either only while the
-question is unanswered, and an answered question is only unanswered again after
-its answer was discarded, so a later record naming it is proof enough without
-knowing which messages were discarded.
+A posted question's card is read the same way. A discarded answer reopens its
+question — the server's item goes back to `open` — but the card is the record
+of what was said, so the item keeps the answer it lost (`discarded_answer`,
+`discarded_in`) and the card is drawn with it, its message id as
+`answerMessageId`; the card reads `Not read` when that id is in the derived set
+([answering-ui.md](../answering-ui.md#6-the-record-card-in-the-stream)). A new
+answer or a withdrawal replaces it.
 
 ### Tool Runs
 
 Every tool call in a turn — a `Bash`, a `Read`, a subagent — is one
-`{ type: "tool_call" }` part holding a `ToolRun`, appended where its `tool_call`
-landed — or, for a subagent's own call, in its parent run's children
-([below](#a-subagents-children)) — so a call reads at the point in the turn that made it. Nothing groups
-them: a summary across several calls can only restate what the individual rows
-already say, and it costs the one thing a transcript is for, which is knowing
-when each thing happened.
+`{ type: "tool_call" }` part holding a `ToolRun`, drawn where its item stands —
+or, for a subagent's own call, in its parent run's children
+([below](#a-subagents-children)) — so a call reads at the point in the turn
+that made it. Nothing groups them: a summary across several calls can only
+restate what the individual rows already say, and it costs the one thing a
+transcript is for, which is knowing when each thing happened.
 
 A subagent call is not a second shape. It *is* a tool call — Claude even carries
 its `tool_use_id` on the task lifecycle frames — and keeping a `TaskRun` beside
-`ToolRun` meant two status machines and two settle-on-interrupt paths for one
-thing. `TaskItem` stays, as the renderer for that category, and its extra
-fields (`description`, `subagent_type`, `prompt`, and a Codex spawn's
-`agent_path`) are derived from `input` the
-way every other row's title is ([tool-call-model.md](../tool-call-model.md)).
+`ToolRun` meant two status machines for one thing. `TaskItem` stays, as the
+renderer for that category, and its extra fields (`description`,
+`subagent_type`, `prompt`, and a Codex spawn's `agent_path`) are derived from
+`input` the way every other row's title is
+([tool-call-model.md](../tool-call-model.md)).
 
-**One part per `tool_use_id`.** A `permission_request` *takes the place* of the
-`tool_call` part it names, rather than sitting beside it: while the user is
-deciding, the machine is waiting for *them*, and a row spinning above the card
-would say the opposite. A `question_posted` record does the same to the
-`question_post` tool row, joined by position rather than by id
-([answering-ui.md §6](../answering-ui.md#6-the-record-card-in-the-stream)) —
-either way it is one act, not two rows.
+The run's status is the item's, read onto the row's five
+(`running` / `background` / `success` / `error` / `interrupted`); what makes
+the item's status what it is — a backgrounded call staying open, a cut turn
+interrupting its calls, a process ending taking its background work down, a
+result after a Stop — is the server's projection
+([agent-integration.md](agent-integration.md#the-history-projection),
+[tool-call-model.md](../tool-call-model.md#toolrun)). Two of its facts are
+kept beside the status rather than folded into it, because each says something
+the status cannot: `finishedAfterStop` (an interrupted call whose late result
+was not an error — drawn as the success it was,
+[tool-call-ui.md](../tool-call-ui.md#status)) and `lostWithProcess`
+(backgrounded work that died with its process, so a `result` on it is Pockode's
+account of the loss —
+[tool-call-ui.md](../tool-call-ui.md#when-a-background-run-finishes)). A
+backgrounded call's placeholder stays beside its outcome (`placeholderResult`):
+the placeholder is what the *agent* read, the outcome what *happened*.
 
-**A card the user has not answered is that call's row**, whichever order the
-two arrive in: Claude announces the call and then asks (the card replaces the
-row), while Codex may ask before it announces the item at all (the call adds no
-row of its own). Either way nothing about the call is drawn as running while it
-is waiting for a person.
-
-Taking the row's place means the reducer has to be able to give it back, and
-that is the half worth reading before changing any of it. Measured against
-claude 2.1.263: the `tool_call` arrives **before** the approval request, and is
-**not** re-sent after approval. So once the card has replaced it, the card is
-all that is left of the call — and a `tool_result` matching no row would be
-dropped as an orphan, which is the command's entire output gone. So the row is
-rebuilt from what the card itself carries (`rowFromCard`) — the same input the
-call announced, since that is where the server got it — **in place of** the
-card once the card is answered: same slot, same id, and the answer kept on the
-run as `ToolRun.permission` (who answered, whether it was Always Allow and what
-that wrote), which is all of the card the row needs to say
+**A call waiting on a person is drawn as the card in its row's place**: while
+the user is deciding, the machine is waiting for *them*, and a row spinning
+above the card would say the opposite
 ([tool-call-ui.md](../tool-call-ui.md#the-permission-card-takes-the-rows-place)).
-When that happens depends on the answer:
+So an item `awaiting_permission` is a `permission_request` part; so is one
+`denied` before the engine reported the refusal, and one `expired`, which never
+ran; and a request that named no call is only ever a card. Once the answer lets
+it run, or the engine reports, the item is a row again, keeping the answer as
+`ToolRun.permission`. A press on the card is drawn at once
+(`pressAnswer`, the store's `pressed`) and gives way when the server's answer
+arrives; a press the server refuses is undone the same way (`resetPrompt`).
+Until the answer is recorded an allowed card is a press on its way
+(`answerRecorded`).
 
-- **An allow hands the place back on its record** (`handBackAllowedCard`): the
-  call runs from then on, so the row is there, running, before the engine says
-  anything — and an interrupt, a turn's end or the process going settles it like
-  any running row. On the record and not on the press, because a press the
-  server refuses is undone on the card (`resetPromptRequest`), which a row could
-  not be. Every client gets the record, the one that answered included. The
-  record also marks the card `answerRecorded`: before it, an allowed card is a
-  press on its way and draws as the running row it is about to become; after
-  it, an allowed card still standing has its call's row elsewhere — a card
-  asked in a later bubble than its row — and draws as answered.
-- **A deny waits for the engine's report**: nothing runs, and the refusal it
-  reports (Claude's error result, Codex's `declined` item) is what the row is
-  rebuilt from. Its status is that result's `error` — or `interrupted`, when a
-  turn ends before Codex reports — and the drawing reads the answer instead
-  (`toolRunLook`).
-- **A call announced after its answered card** — Codex asks before it announces
-  the item — takes the card's place in `applyToolCall`, as a rebuilt row would.
-- **A card nobody answered** — still pending when a result arrives, or expired —
-  keeps saying what it says, and the row goes directly under it, which is where
-  it was.
-- **A result recorded before its answer** is folded in when the answer comes
-  (`takeRowUnderCard`). The server records an answer only after handing it to
-  the CLI, so a result the engine sends back at once — a deny's refusal above
-  all — can be recorded first, and finds a card still pending; the row it puts
-  directly under that card takes the card's place and id once the answer's
-  record arrives. Replay keeps the order, so without this the card and its row
-  would both stand for good.
-
-Two rules keep that honest:
-
-- An existing row **anywhere** in the transcript wins over rebuilding one, so a
-  call can never end up drawn twice.
-- A result rebuilds from a card in any state — the engine has acted, and a
-  denial's refusal text becomes the denied row's result — but **progress only
-  rebuilds from a card the user has answered**. Nothing about a call may spin
-  while the card is still pending.
-
-(Some CLIs do re-send the `tool_call` after approval. That path still draws one
-row: the resend finds the row the allow already handed the place to, and
-refreshes it as any resend does.)
-
-The part holds the run's **current status** — `running` / `background` /
-`success` / `error` / `interrupted` — and the reducer is its only author; the UI
-renders that status and infers nothing of its own. The rules that keep it
-honest:
-
-- **Status is derived, never sent.** A call with no result is `running`;
-  `success` / `error` come from the `is_error` already on the wire. No status
-  field was added to any record, because every input to the derivation is a
-  record the client already has.
-- **A backgrounded call is not a finished one.** Its first result is the
-  placeholder the agent read, recorded with `subtype: "background_started"`, and
-  a run whose newest result carries that subtype is `background` — running, with
-  a badge. Without the subtype a replayed transcript would show work still going
-  as successfully completed. The `background_result` record supersedes it and
-  settles the run; both are kept, because the placeholder is what the *agent*
-  read and the outcome is what *happened*. A third subtype, `background_lost`,
-  is the outcome Pockode writes itself when the CLI process died with the work
-  still running, and the record says who authored it
-  ([tool-call-model.md](../tool-call-model.md#a-third-subtype-with-a-different-author)).
-  It is not what settles the row — the `process_ended` before it already did
-  (below), and an interrupted run keeps `interrupted` under it as under any late
-  result. It is the explanation that arrives later. Only a run still
-  `background` when it arrives — its `process_ended` on a page this client
-  never loaded, or never written (a session stopped by an older build, whose
-  shutdown wrote none, or one whose stream `Shutdown`'s drain gave up on) —
-  settles from it, as
-  `error` like any failed outcome, and takes everything under it along as
-  `interrupted`, backgrounded children included, as `process_ended` would.
-- **A result after the interrupt keeps `interrupted`**, and says whether it
-  was an error: `finishedAfterStop` is set when the newest late result is not
-  one (and is not `background_lost`, Pockode's account of a loss). The status
-  is what the turn did to the call; the flag is what the call did, which only
-  the result's `is_error` says and so has to be kept. The row draws it as the
-  success it was ([tool-call-ui.md](../tool-call-ui.md#status)).
-- A turn that ended as `interrupted` / `error` / `process_ended` settles the
-  runs still `running` in it: nothing can report back on them, and a spinner
-  that never stops is a lie. The rule keys on the turn's resulting **status**,
-  not on the event, so a call whose `tool_call` trails in after the ending is
-  settled too rather than born spinning forever. `complete` is deliberately
-  excluded — background work outlives the turn that started it
-  ([agent-integration.md](agent-integration.md#background-waits)) — and so is
-  `background`, for the same reason.
-- **Background work outlives the turn, not the process.** It lives inside the
-  CLI process, so a `process_ended` settles `background` runs too, and
-  everything under them, as `interrupted` — on every path that record reaches
-  the reducer (`settleAfterProcessGone`): live, replayed, as a back-reference
-  over an older page, as a page's boundary terminal, and in the join of a page
-  whose tail ended that way. Nothing else does: an `interrupted` / `error`
-  ending and an idle turn in `retireAgainstTurn` leave them running, because the
-  process still is — a turn whose background budget ran out is idle with its
-  tasks still going
-  ([agent-integration.md](agent-integration.md#stop-ends-the-background-work-too)).
-  Waiting for `background_lost` instead would leave the row spinning for as long
-  as nobody writes to the session, because that record is only written when the
-  next process starts.
-- **`lostWithProcess` marks work that died with its process.** The reducer is
-  the only one to set it: on a run that was `background` when a `process_ended`
-  settled it — not on a run that was merely `running`, a foreground call beside
-  it or a subagent's call under it — and on any run a `background_lost` reaches,
-  since the `process_ended` before that may sit on a page this client never
-  loaded. It
-  tells a renderer that nothing came back: a `result` on such a run is Pockode's
-  account of the loss, not an outcome the work returned. It is state rather
-  than read off `fromBackground && interrupted`, because that pair also
-  describes a real late return — a `background_started` arriving after the
-  turn's interrupt, then a `background_result` — and a run the turn's own
-  interrupt settled is not marked when the process later ends. What renderers
-  make of it is [tool-call-ui.md](../tool-call-ui.md#when-a-background-run-finishes).
-- **A hard kill while a background budget has run out settles the row at the
-  next start.** Such a turn is idle while its tasks may still run, and every
-  event they produce renews the `lastActive` its idle lease is measured from
-  ([agent-integration.md](agent-integration.md#the-lease-table)), so the
-  process is often still alive when the server stops. A graceful shutdown
-  records its end like any other close — the stream it drains writes on a
-  context of its own, so the CLI's `process_ended` lands, and `Close` has
-  already written the loss record before stopping the process. A server killed
-  with `SIGKILL`, crashed or cut off from power writes neither, and the turn
-  alone gives no sign anything was cut off; the
-  [restart repair](agent-integration.md#restart-repair) goes by the history
-  instead, so the `process_ended` lands at the next start and settles the row.
-  The loss record is not recovered — the server cannot record what happens
-  after it is gone — so the row carries no `background_lost` explanation.
-- Replay adds no settling of its own — it feeds history through this same
-  reducer — so a call still running at the end of a history stays running, which
-  is right while the session is live. A process killed while Pockode was down
-  normally *is* in the history — the session store writes the `process_ended`
-  the killed run never got to
-  ([agent-integration.md](agent-integration.md#restart-repair)) — but the client
-  does not rely on that record being there, because a session stored by a build
-  from before that repair existed has none. The session's `turn` is the
-  authority those records are missing: `settleAgainstTurn` runs over the page a
-  subscription returns, and `retireAgainstTurn` — the half of it that claims
-  nothing about *when* the turn ended — over every older page pulled in after
-  ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client),
-  [lifecycle-ui.md](../lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
-  It settles three things at once, each on its own condition:
-  - a bubble still `streaming` while the turn is not open — an open turn,
-    whether it waits on a permission or a background task, resumes in that
-    same bubble;
-  - a pending card the turn does not list as a blocker (a card it *does* list
-    is still answerable and is left alone);
-  - a call still running once the turn is idle.
-- An interrupted run whose result finally arrives keeps its `interrupted`
-  status. The content is kept and readable; what it cannot do is make the UI
-  claim the call finished normally. No flag records that it came back late —
-  `interrupted` with a result *is* that case, and a second field saying so could
-  only fall out of step. `lostWithProcess` is not that flag: it marks the one
-  case where nothing came back at all (above). This is the "events are events,
-  state is state" rule applied to a single part.
-
-Failure comes from the CLI's `is_error` flag
-([agent-integration.md](agent-integration.md#history-records-and-live-events)),
-never from the result text. So `error` means the *call* failed — an unknown
-`subagent_type`, a command that exited non-zero. A subagent that ran fine and
-reported that it could not do the job is `success`, and the report says the
-rest; the UI does not get to grade it.
+**A posted question takes the place of the call that posted it.** Its item
+names no call — the call reaches the server from the MCP endpoint, which does
+not know the CLI's id for it — so it is joined by position: behind the cards
+of its batch (one call's questions share an `asked_at`), or in the place of the
+newest `question_post` row whose result came after the question
+([answering-ui.md §6](../answering-ui.md#6-the-record-card-in-the-stream)). A
+join that misses leaves the row and the card side by side. A legacy question
+(the CLI's own ask tool) names its call and takes that row's place, one card
+per question.
 
 #### A fetch filed under the call it reads
 
@@ -1064,287 +914,151 @@ Left as a row of its own it lands a screenful below the work it describes, with
 an opaque `task_id` as the only thing tying the two together. So when the server
 could say which call it reads — `origin_tool_use_id`, resolved in the adapter
 because only it holds the map
-([tool-call-model.md](../tool-call-model.md#a-call-about-an-earlier-call)) — the
-fetch takes no row at all, and what it brought back is recorded on that call's
+([tool-call-model.md](../tool-call-model.md#a-call-about-an-earlier-call)) — and
+that call is loaded, the fetch takes no row at all, and is drawn on that call's
 run as an entry in `fetches`.
 
+The fetch is still an item of its own, in its own turn; filing it is the
+presentation's. Fetches always come after the call they read, so a client paging
+newest-first holds every fetch of a call by the time the call's page arrives,
+and a fetch drawn as a row because its call was not loaded is filed once the
+call's page comes in.
+
 A stop (`TaskStop`, `KillShell`) carries the same field and is never filed: it
-is an act with consequences, and keeps its row (`isStopTool`, `lib/taskStop.ts`,
-is the reducer's one exception). The field is kept on its run as
-`originToolUseId`, and its body's `Go to call` is offered only while that row is
-loaded — `loadedStopTargets`, read over the whole transcript and provided by
-`StopTargetsContext`, for the reason `SubagentResumesContext` is a context: the
-work stopped is usually in an earlier bubble than the stop. A jump that could
-land nowhere would be a button that does nothing.
+is an act with consequences, and keeps its row (`isStopTool`, `lib/taskStop.ts`).
+The field is kept on its run as `originToolUseId`, and its body's `Go to call`
+is offered only while that row is loaded — `loadedStopTargets`, read over the
+whole transcript and provided by `StopTargetsContext`, for the reason
+`SubagentResumesContext` is a context: the work stopped is usually in an
+earlier bubble than the stop.
 
-Four rules, and each of them is the answer to a way of getting this wrong:
-
-- **Decided when the `tool_call` arrives, once, and never re-decided.** The call
-  comes first and its result seconds later, so a rule like "absorb it if the
-  fetch succeeded" would draw a row and then take it away again — and a row
-  disappearing under the user is what the transcript may never do
-  ([tool-call-ui.md](../tool-call-ui.md)). The origin being loaded is the only
-  condition known at that moment, which is why it is the only condition. By the
-  same token, a fetch that kept its own row keeps it: paging backwards can bring
-  the origin row into view afterwards, and the row above it does not then move.
-- **Not loaded is the ordinary case, not a fallback.** The adapter forgets a
-  task once it settles, so a fetch against a finished task resolves to nothing;
-  and even a resolved one may name a row on a page of history nobody has pulled
-  in. Either way the fetch is an ordinary row, and `toolSummary` names it
-  (`TaskOutput`, the task id in mono) rather than leaving it to the fallback.
-- **The entry is the reducer's whole memory of the absorbed call.** Its
-  `tool_result` names only its own `tool_use_id`, which by then belongs to no
-  row; the entry, keyed by that id, is what gives the result somewhere to go.
-  Keyed rather than appended, because paging backwards replays every result over
-  each older page it pulls in, and appending would draw one fetch twice.
-- **Nothing about the run itself changes.** Not its status — the fetch read the
-  task, it did not end it, and a failed *fetch* says nothing about the task at
-  all — and not its `result`, which is what this call handed the agent. A fetch
-  whose result never arrives (an interrupted turn) leaves an entry carrying
-  nothing, and the body draws no block for it. The entry has a `state` —
-  `running` from the moment it is filed, `returned` with its result,
-  `interrupted` by whatever sweep interrupts a running run (`settleRunningToolParts`,
-  which reaches the fetches of a `background` run it otherwise leaves alone),
-  replay included — so a fetch still waiting can be told from one that never
-  came back ([tool-call-model.md](../tool-call-model.md#a-call-about-an-earlier-call)).
-  A late result reaching an interrupted entry is kept and leaves it
-  `interrupted`, a run's rule. An entry holds its text under
-  the same two names a run does — `result` and `contents` — and `toolRunText`
-  reads either, so which of the two is the answer stays one rule rather than one
-  per caller.
-
-Unlike `activity` and `output` below, `fetches` is derived from persisted
-`tool_result` records, so it replays. That is the difference the two halves of
-this document keep coming back to: a fetch is the event "at this moment, this
-much had been produced", while a progress line is the state "this is what it is
-doing now".
+An entry's `state` is the fetch item's — `running`, `returned`, or
+`interrupted` when what ended a running call ended it first — and nothing about
+the run itself changes: not its status (the fetch read the task, it did not end
+it, and a failed fetch says nothing about the task) and not its `result`, which
+is what this call handed the agent. An entry holds its text under the same two
+names a run does — `result` and `contents` — and `toolRunText` reads either.
 
 **The turn waiting on a fetch is the bubble's `awaitedFetch`.** A filed fetch
 draws no row, so nothing in the parts says the main agent's newest call is
 one; the tail line needs exactly that
-([turn-progress-ui.md](../turn-progress-ui.md#23-what-it-says)). The reducer
-sets it on the open bubble when it files a fetch that has no
-`parent_tool_use_id` — a subagent's fetch is not what the turn is doing — and
-drops it with the fetch's result, with the sweep that settles running fetches,
-and with the main agent's next text, thinking or call. It is live state derived
-from records, like the bubble's `status`, and it replays the same way: a page
-reloaded in the middle of the fetch still has it.
+([turn-progress-ui.md](../turn-progress-ui.md#23-what-it-says)). It is read off
+the open bubble's items: set while the main agent's newest text, thinking or
+call is a filed fetch still running.
 
-What the renderers make of the list — where it lands on the row and in the body,
-why each fetch keeps its own block, and what a failed or empty one says — is
+What the renderers make of the list is
 [tool-call-ui.md](../tool-call-ui.md#a-fetch-reads-on-the-row-it-came-from).
 
 #### A plan filed on the call that wrote it
 
-A `plan` record ([turn-progress-ui.md §4.6](../turn-progress-ui.md#46-the-plan-record))
-says where the agent's plan stood at one moment. One that names a call (Claude's
-`tool_use_id`) is set on that call's run as `plan`, found at any depth, and adds
-no part: the call's row is the plan's history. One with a `plan_id` (Codex) has
-no call, so it becomes a settled `Plan` run of its own, placed and filed by the
-ordinary `tool_call` path. Either way `plan` carries its place in record order
-(`order`), because the plan chip picks the newest plan by record order, not by
-call order. A persisted record's `order` is its `seq`. One never persisted
-(`orderedPlan`) goes between the newest seq loaded anywhere (a message's
-anchor, or a plan's whole seq) and the next whole number: at that seq + 0.5,
-or, when an unpersisted plan already stands past it, halfway between that plan
-and the next whole number. So several in a row keep their order, and the next
-persisted record is always newer.
-
-The `seq` is read off the record in `normalizeEvent`, not taken from the
-caller. A persisted Claude plan is a back-reference (`isBackReference`): its
-call may be on a page above, and paging replays back-references with no seq.
-Read from the caller, an old plan replayed that way would count as the newest.
-An unpersisted one is not a back-reference, because replayed over an older page
-it could not be placed in order. A Codex plan is not one either, because
-replaying it would draw its row a second time.
+A plan ([turn-progress-ui.md §4.6](../turn-progress-ui.md#46-the-plan-record))
+says where the agent's plan stood at one moment. One filed on a call (Claude's)
+rides on that call's item and is set on its run as `plan`: the call's row is the
+plan's history. A Codex plan has no call and is an item of its own, drawn as a
+settled `Plan` row so lists, groups and the work figures need no special case;
+one filed on a call the history does not hold (a fork cut it off) has no row to
+ride on and is dropped. Either way `plan` carries its place in record order
+(`order`) — the Codex item's seq, or the newest record of the call it rides on —
+because the plan chip picks the newest plan by record order, not by call order.
 
 #### A subagent's children
 
-A subagent's own `text` and `tool_call` records name the call they ran under
-(`parent_tool_use_id`), and the reducer files them into that run's `children` —
-a list of ordinary parts, the same shape a message's content is, built by the
-same `applyEventToParts`. A child that is itself a subagent call holds children
-of its own. So a message's content is a tree, and `lib/partTree.ts` holds the
-walks over it: every rule above that finds "the part with this id" or touches
-"every pending card" finds and touches it at any depth — a result settling a
-child, a card taking a child's place and its row coming back beside it, a
-process ending expiring a subagent's card, an answer settling a subagent's
-question. What the renderers do with the tree is
+A subagent's own text, thinking and calls are nested in its call's item, at any
+depth, however the records interleaved; the transcript draws them as that run's
+`children` — a list of ordinary parts, the same shape a message's content is,
+built by the same code. So a message's content is a tree, and `lib/partTree.ts`
+holds the walks over it. What the renderers do with the tree is
 [tool-call-ui.md](../tool-call-ui.md#a-subagents-own-work).
 
-The rules particular to children:
-
-- **Filed wherever the parent is**, which is not always the bubble the turn is
-  writing: a backgrounded subagent works on while the conversation moves on,
-  and a read point leaves a foreground one in the bubble above. A filed child
-  changes no bubble's status and opens no bubble — it is the subagent's, and
-  says nothing about the turn. A permission request names no parent, so a
-  subagent's card is found by its call, wherever that was filed, and a posted
-  question — which names no call — by the position join, at any depth. The
-  card can also come first: on claude 2.1.286 a subagent's call is asked about
-  before its `tool_call` is written, so the card finds no row and lands flat in
-  the turn's bubble; the `tool_call`, which does name the parent, then takes it
-  along into the parent's children, where it stands in for the row as usual —
-  with the row approval rebuilt beside it, should the engine have reported on
-  the call before announcing it. A bubble the card itself opened — a background subagent asking after its turn
-  ended, which the bubble records as `openedByCard` — goes with it rather than
-  staying behind open and empty, reading as a turn still running; so does any
-  bubble the card leaves empty once its turn completed, as the ending would
-  have dropped it. Any other open bubble is the turn's, empty or not, and one
-  whose turn was cut short keeps its ending line. Where the call cannot be
-  filed either, the card stays flat and takes the parent the call names; a flat
-  card that already names one was left by a page boundary and is not moved.
-- **A parent that is not loaded leaves the child flat**, where it arrived — an
-  earlier page, or a call a fork cut dropped. The earlier page is rare: the
-  server starts a page early enough to hold the calls of the subagents whose
-  work it holds, up to a maximum page
-  ([agent-chat.md](../agent-chat.md#history-paging)), because on a 61-record
-  session the default page boundary fell between a subagent's call and a
-  child that arrived after a sibling's result, and the child stayed drawn as a
-  stray top-level row for good. A child left flat keeps
-  `parentToolUseId`, which stops it running together with the main agent's
-  text and lets the parent's row count it once its page loads; a card that
-  takes such a row's place keeps it, and so does the row it hands its place
-  back to.
-  It is not moved then, by the rule a fetch follows: a row never leaves from
-  under the reader. And while any of a run's children sit flat, the ones that
-  follow go flat after them, so nothing is filed above words that came first.
-- **A settled subagent settles what it leaves running.** Its `tool_result`
-  interrupts every child still `running`, at any depth; a child in
-  `background` is left to settle by its own notification, and so is everything
-  under it — until the process ends, which settles them all (above), as does a
-  `background_lost` reaching the subagent. An aborted turn's sweep follows the
-  same two rules, and so does a call filed under a subagent that was interrupted
-  or failed, or under one still running once its turn was cut short — unless a
-  backgrounded subagent is above it, or the user has sent a turn since, which
-  makes a subagent running then one resumed (below). One filed under a subagent that *finished*
-  is left running, whatever became of its turn: Claude resumes a finished
-  subagent when the agent writes to it (`SendMessage`, measured on claude
-  2.1.286), the resumed work names the call that first spawned it, and its
-  results are still to come — as they are for a Codex child given more work.
-  So is one filed under a subagent that was interrupted or failed once the user
-  has sent a turn since: that is the subagent resumed, not output trailing its
-  end.
-- **A resumed subagent runs again, and settles again.** The two CLIs say it
-  differently, so the reducer learns it two ways, and in neither does an event
-  record carry the row's state:
-  - **Codex** settles the spawn's own call again when the child's next turn
-    ends, so the call itself runs again: the adapter announces it once more as
-    the turn starts — a `tool_call` with `subtype: "resumed"`
-    ([agent-integration](agent-integration.md#subagent-threads)) — and the
-    reducer puts that run back to `running` (`resumeToolRun`), on that
-    record's clock, keeping its last report and figures for its next result to
-    replace. Wherever the run sits; and with the run not loaded, nothing — a
-    resume is no call of its own. From then on it is an ordinary running run,
-    so everything above that settles one settles it: its result, a Stop's
-    sweep, the process ending.
-  - **Claude** resumes a subagent under a call of its own: `SendMessage`, whose
-    `to` is the id the subagent's call reported (`subagent.agent_id`, or the
-    `agentId:` line of an older hand-back or placeholder), handing back a
-    placeholder at once and the resumed subagent's outcome as its background
-    result. Nothing is written onto the subagent's run. Whether it is running
-    again is read off that call each time (`liveResumes`, provided through a
-    context the way the unfiled children are): while a `SendMessage` to it is
-    `running` or `background`, the row draws itself running, on that call's
-    clock and live progress (`resumedRun`), and its body keeps the report it
-    has. A copy of the call's status on the subagent's run would have to follow
-    the call through every way a call settles, and one it missed would leave
-    the row spinning for good; read off the call, the row settles whenever the
-    call does. A subagent still live is not resumed by a message: it never
-    stopped. A known limit of keeping the resume off the run: a Stop's sweep
-    (`settleRunningToolRuns`) cannot see it either, so while a backgrounded
-    `SendMessage` keeps such a subagent working past a Stop, the children it
-    had running are marked interrupted — its run reads `success`, not
-    `background`, so the exemption for work under a backgrounded subagent does
-    not reach them. The row itself still reads as running, and children that
-    arrive after the Stop run as usual; making the sweep skip them would need
-    the reducer to know about the resume.
-- **Each text record is its own paragraph.** Consecutive `text` from the same
+- **Nesting is the server's.** A call recorded before the subagent call it ran
+  under moves under it when that arrives; work a subagent resumed later
+  (Claude's `SendMessage`, a Codex child given more work) names the call that
+  first spawned it and is nested there. A child changes no bubble's status and
+  opens no bubble — it is the subagent's.
+- **A child whose parent is not in the history sits flat**, at the top level,
+  keeping `parentToolUseId` — a fork cut the call off. That stops it running
+  together with the main agent's text.
+- **A resumed subagent runs again.** Codex settles the spawn's own call again
+  when the child's next turn ends, so its item simply goes back to `running`.
+  Claude resumes a subagent under a call of its own, `SendMessage`, whose `to`
+  is the id the subagent's call reported; nothing is written onto the
+  subagent's run, and whether it is running again is read off that call
+  (`liveResumes`, provided through `SubagentResumesContext`):
+  while a `SendMessage` to it is `running` or `background`, the row draws itself
+  running, on that call's clock and live progress (`resumedRun`). A copy of the
+  call's status on the subagent's run would have to follow the call through
+  every way a call settles; read off the call, the row settles whenever the
+  call does.
+- **Each text item is its own paragraph.** Consecutive texts from the same
   speaker join with a blank line, not end to end: both adapters send whole
-  messages, never deltas. Filing made this matter — the main agent's "A and B
-  are running" and its "A finished" used to have the subagents' work between
-  them, and with that filed away they sat back to back.
-- **Consecutive thinking from the same speaker is one part.** A `thinking`
-  record joins the `thinking` part before it, as one more entry in its
-  `thoughts`, because the engine splitting one pause into two blocks is nothing
-  a reader can use ([turn-progress-ui.md](../turn-progress-ui.md#11-what-it-is)).
-  A record that would draw nothing — no text, not redacted, no duration — is
-  dropped in `applyServerEvent` before it can open a reply or join a run.
+  messages, never deltas.
+- **Consecutive thinking from the same speaker is one part**, each item one
+  entry in its `thoughts`, because the engine splitting one pause into two
+  blocks is nothing a reader can use
+  ([turn-progress-ui.md](../turn-progress-ui.md#11-what-it-is)). A thinking
+  that would draw nothing — no text, not redacted, no duration — is left out.
 
 #### Live state on a run
 
 Four of a run's fields do not come from history and cannot: `activity` (the
-latest one-line status), `output` (the deltas a streaming engine sends,
-accumulated client-side), `outputDroppedLines` (what the cap on `output` has
-dropped, below) and `subagentProgress` (a subagent's live counters, replaced
-whole by each frame and **cleared when the run settles**, so a stale live count
-never stands in for the result's `subagent` report). They arrive as
-`tool_activity`, which is broadcast and never persisted — a progress line is a
-*latest value*, and a snapshot of one in the transcript becomes a lie the moment the next one arrives
-([agent-event.md](../agent-event.md#what-is-not-an-event)).
+latest one-line status), `output` (what a streaming engine has printed),
+`outputDroppedLines` (what the cap on `output` has dropped, below) and
+`subagentProgress` (a subagent's live counters). They come from the call's
+stream: the subscription's `streams.tools` snapshot and the `chat.delta`s that
+continue it, which are never persisted — a progress line is a *latest value*,
+and a snapshot of one in the transcript becomes a lie the moment the next one
+arrives ([agent-event.md](../agent-event.md#what-is-not-an-event)). The store
+keeps them by `tool_use_id` and the run reads them while it is `running` or
+`background`.
 
-Three consequences the reducer encodes:
-
-- **A replayed run has none of them, and is still correct**, because `status` carries
-  "still going" on its own. This is the whole reason status is derived from
-  persisted records while progress is not.
-- **Progress is ignored on a settled run.** `useChatMessages` coalesces updates
-  to one animation frame — deltas can arrive faster than the screen refreshes —
-  so one held back may be applied after the result. A progress line under a
-  finished row is worse than a moment of missing liveness.
-- **An empty update leaves the last line standing**, and the accumulation is
-  capped at its last 200 lines. A line that blinks in and out re-flows every row
-  below it, and a build that printed ten thousand lines is not ten thousand DOM
-  nodes. What the cap drops is counted in `outputDroppedLines`, live state like
-  `output` itself, so a reader of the buffer — the full screen viewer — knows
-  where its lines sit in what this client has received (a client that joined
-  mid-run starts from 0: the server keeps no output for it)
-  ([tool-call-ui.md](../tool-call-ui.md#full-screen)).
-
-A client that subscribes mid-run has missed everything it was not listening for,
-and on a phone that is the normal case. `chat.messages.subscribe` therefore
-returns the newest activity — and a subagent's newest progress — per call still
-in flight, which is applied over the replayed transcript ([agent-chat.md](../agent-chat.md)).
+- **A run read from history has none of them, and is still correct**, because
+  `status` carries "still going" on its own.
+- **A stream ends where the server says** (`streams_ended`), dropping all four:
+  the item has all of it, and a stale live count never stands in for the
+  result's `subagent` report. Deltas held for the next frame are applied before
+  the update that ends their stream, so the output never trails its result.
+- **Deltas are coalesced per animation frame** in `useChatMessages`, merged per
+  call (output appended, the rest latest values) rather than queued: they can
+  arrive faster than the screen refreshes, and a hidden tab flushes nothing.
+- **An empty activity leaves the last line standing**, and the output is
+  capped at its last 200 lines. A line that blinks in and out re-flows every
+  row below it, and a build that printed ten thousand lines is not ten thousand
+  DOM nodes. What the cap drops is counted in `outputDroppedLines`, so a reader
+  of the buffer — the full screen viewer — knows where its lines sit in what
+  this client has received ([tool-call-ui.md](../tool-call-ui.md#full-screen)).
 
 #### Times on a run
 
-A run's times are not live state: `startedAt` and `endedAt` are copied from the
-records' `observed_at`, so a replayed run has them exactly as a live one does
+A run's times are not live state: `startedAt` and `endedAt` are the item's
+`started_at` and `ended_at`, so a run read from history has them exactly as a
+live one does
 ([tool-call-model.md](../tool-call-model.md#observed-times-and-reported-durations)
 defines which records they come from, and why the turn's ending never counts).
 The one time that *is* about this client is `seenAt`, the start on its own
-clock, which is all a ticking counter can subtract from `Date.now()`. How an
-event reached the client decides it, so it travels beside the event rather than
-in it (`ApplyOptions`):
+clock, which is all a ticking counter can subtract from `Date.now()`. The store
+sets it on the node as the item arrives:
 
-- **`live`** — the start is the moment it arrived, `new Date()`.
-- **`clock`** — a replayed event, with the `server_time` its page came with and
-  when that page arrived (`ServerClockReading`, built by `readServerClock`).
-  The start is carried over as `receivedAt − (serverTime − startedAt)`: an
-  interval on the server's clock added to a moment on this one, so the two
-  clocks never have to agree — the turn clock's rule
+- **From an update that changes `started_at`** of a call the store holds — an
+  answer letting it run, a resume — it is the moment the update arrived. A call
+  an update brings for the first time is read through the subscription's clock
+  reading, as a page's is: it may have started long before (one adopted from a
+  page never loaded), and the reading is close to its arrival otherwise.
+- **From a page**, it is `started_at` carried over through the page's
+  `server_time` and when the page arrived (`ServerClockReading`, built by
+  `readServerClock`): `receivedAt − (serverTime − startedAt)`, an interval on the
+  server's clock added to a moment on this one, so the two clocks never have to
+  agree — the turn clock's rule
   ([turn-progress-ui.md §2.3](../turn-progress-ui.md#23-what-it-says)).
-- **neither** — no `seenAt`, and no counter: a page from a server that
-  predates `server_time`, say. A missing counter is the honest failure;
+- **Otherwise** — no `started_at`, or a page without `server_time` — there is
+  no `seenAt` and no counter. A missing counter is the honest failure;
   subtracting a server time from the phone's clock would show drift as work.
 
 `receivedAt` is when the page *arrived*, not when it was put on screen, and the
 difference is real for a viewed session: its `session_view.history` page sits in
 react-query's cache, so `useViewedSession` hands over the query's
 `dataUpdatedAt` as `pageReceivedAt` and `useChatMessages` installs the page
-against that, not against `Date.now()`; otherwise a cached page's counters would
-come up short by the cache's age.
-
-A call that waited on a permission card starts at the answer, and the answer's
-record may be applied after the card already shows it — a press sets the status
-optimistically. So the time is stamped onto the card by its own step
-(`stampPermissionAnswer`, `answeredAt` / `answerSeenAt`), independent of the
-status, and the row that takes the card's place takes its start from there;
-the first answer's time stands, as its status does. An answer whose card is on an older
-page comes back as a back-reference when that page is loaded, and is placed
-through *that* page's reading (`HistoryPageCatchUp.clock`): any reading from the
-server carries any of its times over, so the page the record came from does not
-matter.
+against that; otherwise a cached page's counters would come up short by the
+cache's age.
 
 The duration a row shows is `toolRunDurationMs` (`web/src/lib/toolRun.ts`), not
 a field: the engine's `durationMs` and the observed `endedAt − startedAt` are
@@ -1354,79 +1068,42 @@ subagent row and any later summary read it the same way.
 #### Times on a reply
 
 A reply carries the two moments its span is read from, `openedAt` and
-`endedAt` on the `AssistantMessage`, copied from records for the same reason a
-run's are: they are history, so a reload draws what the live view did
+`endedAt` on the `AssistantMessage`, read off items for the same reason a run's
+are: they are history, so a reload draws what the live view did
 ([tool-call-ui.md](../tool-call-ui.md#where-the-duration-comes-from) says which
-records). The reducer sets them where it already decides a reply's shape —
-the placeholder a turn-opening `message` leaves (`applyUserMessage`), the
-bubble a read point closes and the one it opens (`closePreviousTurn`, the
-`message_ingested` branch), the terminal-event status, and the join of a reply
-a page boundary cut in two (`prependHistoryPage`: the older half's start, the
-newer half's ending unless the older one had already ended). The sending tab
-gets no record for its own message, so `deliverEcho` writes `openedAt` onto its
-placeholder from the send's answer. A reply that opened without a message
-— resumed output, `openedByCard` — has none, and nothing is guessed.
-`turnWork` (`lib/turnWork.ts`) reads the work figures' span and call count off
-a settled reply — whether it made a call at all decides whether the turn has
-figures, on its changes card or its turn-end row; `MessageList` tells it when
-the reply is the first loaded one with older pages above, which without an
-`openedAt` may be the back half of a cut reply, so it counts nothing then — nor
-when the reply's only calls are a subagent's steps left flat, which says the
-same thing outright.
-
-### Why Pure Function Instead of Store
-
-- **Reusable** — same reducer replays history and processes live events
-- **Testable** — pure `(Message[], Event) → Message[]` tests
-- **Composable** — integrates into any hook without store coupling
-
-If message processing were a store, each session would need its own store instance, making history replay awkward.
-
-### Immutability Optimization
-
-The reducer avoids unnecessary copies — only changed messages get new references:
-
-```typescript
-// web/src/lib/messageReducer.ts (simplified)
-function updatePermissionRequestStatus(messages, requestId, newStatus) {
-  let anyChanged = false;
-  const updated = messages.map((msg) => {
-    // ... check if this message needs update
-    if (!changed) return msg;  // Return original reference
-    anyChanged = true;
-    return { ...msg, parts: updatedParts };
-  });
-  return anyChanged ? updated : messages;  // Return original array if nothing changed
-}
-```
-
-React.memo benefits from reference stability — unchanged messages don't trigger re-renders.
+records). A reply opens at its turn's opening message's `observed_at`, or at
+the read point that opened it; it ends at the next read point, or at the turn's
+`ended_at` on its last bubble. The sending tab's echo takes `openedAt` from the
+send's reply. A reply that opened without a message — output the CLI resumed by
+itself — has none, and nothing is guessed. `turnWork` (`lib/turnWork.ts`) reads
+the work figures' span and call count off a settled reply. It counts nothing
+on a reply whose start is not loaded: the server marks the newer half of a turn
+a page boundary cut as a `continued` stretch, `ChatItems.continuedFrom` holds
+the first item of the oldest loaded page's first stretch while it is, and
+`buildTranscript` marks the reply that stretch opens `startNotLoaded` unless
+something loaded — its turn's opening message, a read point — opened it. Nor
+does it count a reply whose only calls are a subagent's steps left flat, whose
+spawning call a fork cut off.
 
 ### Transcript-Wide Facts
 
 Some facts are the whole transcript's and are read by several components:
 the resumed subagents (`liveResumes`), the stop targets that are loaded
-(`loadedStopTargets`), the unfiled children (`unfiledChildren` /
-`unfiledParts`), the top-level agents and the current plan
+(`loadedStopTargets`), the top-level agents and the current plan
 (`topLevelAgentRuns`, `currentPlan`), and a run found by its id
 (`findLoadedRun`). Each streamed record hands over a new transcript array, and
 the list, the status line, the attention strip and an open subagent transcript
 all ask for these facts again in the same commit. On a 300-turn session that
 meant several walks over about 24,000 calls for every record.
 
-The same reference stability makes this cheap (`web/src/lib/transcriptMemo.ts`).
+Reference stability makes this cheap (`web/src/lib/transcriptMemo.ts`).
 `perTranscript` keys a fact on the transcript array, so it is derived once per
 record however many readers ask. `perMessage` keys what one message contributes
 on that message, so a walk over the calls re-reads only the message the record
 changed, and the transcript-wide answer is put together from the other
-messages' cached parts. Both depend on the reducer never changing a message or
-the array in place. Code that edited one in place would get stale answers back
-and no error.
-
-The unfiled children are only memoized per transcript. Their walk reads only a
-bubble's top-level parts, which is already cheap. What costs is building each
-parent's entry, which happens only after a page cut in mid-turn, and that part
-is shared rather than made incremental.
+messages' cached parts. Both depend on `buildTranscript` handing back the same
+message objects for what did not change, and never changing one in place. Code
+that edited one in place would get stale answers back and no error.
 
 ## Extension System
 
@@ -1580,7 +1257,8 @@ Key features:
 |------|---------|
 | `web/src/lib/wsStore.ts` | WebSocket + RPC + subscription management |
 | `web/src/lib/queryClient.ts` | react-query setup + worktree-dependent invalidation |
-| `web/src/lib/messageReducer.ts` | Event → Message state transformation |
+| `web/src/lib/chatItems.ts` | The client's copy of the transcript's items: pages, updates, live streams, this client's sends |
+| `web/src/lib/transcript.ts` | Items → the `Message[]` the chat draws ([why](#the-transcript)) |
 | `web/src/lib/partTree.ts` | Walks over a message's content, which nests a subagent's work under its call; mints part ids |
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |

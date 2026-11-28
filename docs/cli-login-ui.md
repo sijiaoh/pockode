@@ -498,7 +498,8 @@ for the agent, not what the user entered. Latest is read against the transcript
 as it is while the sheet is up, not as it was when it opened. The turn is named
 by the place in history of the message that opened it as well as by its bubble's
 id, because a reconnect — routine while the user is off in a browser signing
-in — replays the transcript into bubbles with new ids; the bubble's own place
+in — replaces the transcript, and a bubble's id is not promised to survive
+that; the bubble's own place
 will not do, since it moves on to the error when a turn still retrying at the
 press goes on to fail. The rule lives in `utils/sendAgain.ts`.
 

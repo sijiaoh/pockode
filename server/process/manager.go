@@ -226,9 +226,6 @@ type Process struct {
 	// grace period after it is measurable. Guarded by mu; see Manager.requestStop.
 	leaseAskedFor time.Time
 	leaseAskedAt  time.Time
-	// toolActivity is what the calls still in flight are doing, for a client that
-	// subscribes after they said so. Its own lock; see toolActivity.
-	toolActivity toolActivity
 	// pageCalls stamps a page tool's result with the page it stored.
 	pageCalls pageCalls
 	// workCalls stamps a work tool's result with the work it acted on.
@@ -844,27 +841,6 @@ func (m *Manager) GetProcess(sessionID string) *Process {
 // HasProcess returns whether a process exists for the given session.
 func (m *Manager) HasProcess(sessionID string) bool {
 	return m.GetProcess(sessionID) != nil
-}
-
-// GetToolActivity returns what each tool call still in flight last reported
-// doing, by tool_use_id. Nil when no process exists or nothing is in flight.
-func (m *Manager) GetToolActivity(sessionID string) map[string]string {
-	proc := m.GetProcess(sessionID)
-	if proc == nil {
-		return nil
-	}
-	return proc.toolActivity.snapshot()
-}
-
-// GetToolProgress returns how far each subagent still in flight last reported
-// having come, by its call's tool_use_id. Nil when no process exists or none
-// reported any.
-func (m *Manager) GetToolProgress(sessionID string) map[string]agent.SubagentProgress {
-	proc := m.GetProcess(sessionID)
-	if proc == nil {
-		return nil
-	}
-	return proc.toolActivity.progressSnapshot()
 }
 
 // ProcessCount returns the number of running processes.
@@ -1966,8 +1942,6 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 	if eventType.ActivatesSession() {
 		p.markActivated(ctx, log)
 	}
-
-	p.toolActivity.observe(event)
 
 	// The turn state is decided before the record is written and announced
 	// after it, which is two separate promises. Deciding first means anything

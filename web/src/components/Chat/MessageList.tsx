@@ -9,9 +9,9 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { openAssistantIndex } from "../../lib/messageReducer";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import type { TurnTail } from "../../lib/thinking";
+import { openAssistantIndex } from "../../lib/transcript";
 import { isTurnOpen, openTurnReplyIds } from "../../lib/turnOverview";
 import type {
 	Message,
@@ -51,10 +51,6 @@ import {
 	OpenedThoughtsContext,
 	TurnTailContext,
 } from "./turnTailContext";
-import {
-	UnfiledChildrenContext,
-	useUnfiledChildrenValue,
-} from "./unfiledChildrenContext";
 import { useMessagesTail, useTranscriptScroll } from "./useTranscriptScroll";
 
 /**
@@ -325,7 +321,6 @@ function MessageList({
 	// message sent mid-reply began landing *below* the reply it went into
 	// (docs/lifecycle-ui.md §2.3): the last row is then the message, not the turn.
 	const openIndex = openAssistantIndex(messages);
-	const unfiled = useUnfiledChildrenValue(messages);
 	const resumes = useSubagentResumesValue(messages);
 	const stopTargets = useStopTargetsValue(messages);
 	const discardedContext = useDiscardedMessagesValue(messages, hasMoreHistory);
@@ -462,72 +457,65 @@ function MessageList({
 						)}
 						<TurnTailContext value={tail ?? IDLE_TAIL}>
 							<OpenedThoughtsContext value={openedThoughtIds}>
-								<UnfiledChildrenContext value={unfiled}>
-									<SubagentResumesContext value={resumes}>
-										<StopTargetsContext value={stopTargets}>
-											<DiscardedMessagesContext value={discardedContext}>
-												<TranscriptViewContext value={view}>
-													<ToolJumpContext value={toolJump}>
-														<StepWindowFoldContext value={stepWindowFold}>
-															<OpenWorkDetailContext value={onOpenWorkDetail}>
-																{messages.map((message, index) => {
-																	return (
-																		<div
-																			key={message.id}
-																			data-message-id={message.id}
-																			// This wrapper is the row the view can be held still over
-																			// (see `scrollAnchor`).
-																			{...anchorCandidateProps}
-																			// Layout containment: without a boundary per row, output growing
-																			// the newest row sends Chromium's pre-paint through every box in
-																			// the transcript — ~30 ms a record at 300 turns, measured by the
-																			// streaming bench's trace. Not paint containment, which would
-																			// clip the outward focus rings of controls flush with a row's
-																			// sides.
-																			className="py-1.5 [contain:layout_style] sm:py-2"
-																		>
-																			<MessageItem
-																				message={message}
-																				sessionId={sessionId}
-																				// Top of the loaded transcript is the session's own start
-																				// only once there are no older pages left above it.
-																				isFirst={index === 0 && !hasMoreHistory}
-																				olderPagesAbove={
-																					index === 0 && hasMoreHistory
-																				}
-																				isOpenTurn={index === openIndex}
-																				inOpenTurn={openTurnIds.has(message.id)}
-																				isCodex={isCodex}
-																				onPermissionRespond={
-																					onPermissionRespond
-																				}
-																				onAnswerQuestion={onAnswerQuestion}
-																				promptError={promptError}
-																				onOpenWorkDetail={onOpenWorkDetail}
-																				onOpenFile={onOpenFile}
-																				onForkMessage={onForkMessage}
-																				onSignIn={onSignIn}
-																				onSwitchAccount={onSwitchAccount}
-																				isDiscarded={
-																					message.role === "user" &&
-																					message.messageId !== undefined &&
-																					discardedContext.discarded.has(
-																						message.messageId,
-																					)
-																				}
-																				onRestoreMessages={onRestoreMessages}
-																			/>
-																		</div>
-																	);
-																})}
-															</OpenWorkDetailContext>
-														</StepWindowFoldContext>
-													</ToolJumpContext>
-												</TranscriptViewContext>
-											</DiscardedMessagesContext>
-										</StopTargetsContext>
-									</SubagentResumesContext>
-								</UnfiledChildrenContext>
+								<SubagentResumesContext value={resumes}>
+									<StopTargetsContext value={stopTargets}>
+										<DiscardedMessagesContext value={discardedContext}>
+											<TranscriptViewContext value={view}>
+												<ToolJumpContext value={toolJump}>
+													<StepWindowFoldContext value={stepWindowFold}>
+														<OpenWorkDetailContext value={onOpenWorkDetail}>
+															{messages.map((message, index) => {
+																return (
+																	<div
+																		key={message.id}
+																		data-message-id={message.id}
+																		// This wrapper is the row the view can be held still over
+																		// (see `scrollAnchor`).
+																		{...anchorCandidateProps}
+																		// Layout containment: without a boundary per row, output growing
+																		// the newest row sends Chromium's pre-paint through every box in
+																		// the transcript — ~30 ms a record at 300 turns, measured by the
+																		// streaming bench's trace. Not paint containment, which would
+																		// clip the outward focus rings of controls flush with a row's
+																		// sides.
+																		className="py-1.5 [contain:layout_style] sm:py-2"
+																	>
+																		<MessageItem
+																			message={message}
+																			sessionId={sessionId}
+																			// Top of the loaded transcript is the session's own start
+																			// only once there are no older pages left above it.
+																			isFirst={index === 0 && !hasMoreHistory}
+																			isOpenTurn={index === openIndex}
+																			inOpenTurn={openTurnIds.has(message.id)}
+																			isCodex={isCodex}
+																			onPermissionRespond={onPermissionRespond}
+																			onAnswerQuestion={onAnswerQuestion}
+																			promptError={promptError}
+																			onOpenWorkDetail={onOpenWorkDetail}
+																			onOpenFile={onOpenFile}
+																			onForkMessage={onForkMessage}
+																			onSignIn={onSignIn}
+																			onSwitchAccount={onSwitchAccount}
+																			isDiscarded={
+																				message.role === "user" &&
+																				message.messageId !== undefined &&
+																				discardedContext.discarded.has(
+																					message.messageId,
+																				)
+																			}
+																			onRestoreMessages={onRestoreMessages}
+																		/>
+																	</div>
+																);
+															})}
+														</OpenWorkDetailContext>
+													</StepWindowFoldContext>
+												</ToolJumpContext>
+											</TranscriptViewContext>
+										</DiscardedMessagesContext>
+									</StopTargetsContext>
+								</SubagentResumesContext>
 							</OpenedThoughtsContext>
 						</TurnTailContext>
 					</div>

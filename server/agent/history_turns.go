@@ -147,6 +147,35 @@ func (t *TurnInference) Push(out []InferredLine, raw json.RawMessage) []Inferred
 	return t.step(out, raw, seq, kind)
 }
 
+// PushWritten is Push for a record this version has just written, which needs
+// nothing after it to be read: a message it writes is as untagged as any other
+// version's, but it is this version's. So nothing is held behind it, and the
+// lines held before it go with it, as they would with the tagged record
+// that follows it in the file. A reader folding a history as it is written
+// (projection.Live) sees a message the moment it lands rather than when the
+// next record does.
+func (t *TurnInference) PushWritten(out []InferredLine, raw json.RawMessage) []InferredLine {
+	seq := session.NextHistorySeq(t.prevSeq, raw)
+	if seq.Valid() {
+		t.prevSeq = seq
+	}
+	kind := kindOf(raw, seq)
+	switch kind {
+	case kindNotInFile:
+		if len(t.held) == 0 {
+			return append(out, InferredLine{Raw: raw, Seq: seq, Turn: session.HistoryTurnOf(raw)})
+		}
+		t.held = append(t.held, heldLine{raw: raw, seq: seq, kind: kind})
+		return out
+	case kindMessage:
+		out = t.release(out, kindTagged)
+		return t.step(out, raw, seq, kindTagged)
+	}
+	out = t.release(out, kind)
+	t.prev = kind
+	return t.step(out, raw, seq, kind)
+}
+
 // Settle appends the lines still held as they read if nothing follows them. The
 // inference itself is left as it was, so the history can still be pushed onto.
 func (t *TurnInference) Settle(out []InferredLine) []InferredLine {

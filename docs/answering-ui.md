@@ -1601,8 +1601,9 @@ They render through **this same card**, and that is the only reason the old
 records still read as anything: one card per question, since a legacy record
 could carry several under one `request_id`, and `question_response` settles them
 all at once. An answered one fills its read-only form in exactly as a new one
-does — the old flat answer string is parsed back into the two halves
-(`web/src/utils/questionAnswer.ts`, which exists for this).
+does — the server's projection parses the old flat answer string back into
+the two halves (`parseLegacyAnswer` in `server/projection/normalize.go`), so the
+card receives the answer in the same shape a new one has.
 
 One thing is different, and the card says it in words: a legacy card nothing
 settled stays `Pending` and states *"This was asked through the CLI's own tool,
@@ -1739,7 +1740,7 @@ silent, and this design simply never enters it.
 | `web/src/lib/questionDraftStore.ts` | the drafts, persisted to `question_drafts` and vouched for against the unanswered list before they are shown (§5) |
 | `web/src/lib/rpc/chat.ts` | `sendMessage` takes `answering`; `questionResponse` and the `chat.question_response` RPC behind it are deleted |
 | `web/src/utils/answerRecords.ts` | new — the panel's entries as answer records for the echo and as params for the wire; it writes no body, the server does (§3); replaces `degradedAnswer` in `AskUserQuestionItem.tsx` |
-| `web/src/utils/questionAnswer.ts` | `QuestionSelection` for the form and `noteApplies`, where a note may go (§3); `parseAnswer` / `lookupAnswer` kept for the legacy records alone, to read an old flat answer string back |
+| `web/src/utils/questionAnswer.ts` | `QuestionSelection` for the form and `noteApplies`, where a note may go (§3) |
 | `web/src/utils/pendingQuestions.ts`, `Chat/PendingQuestionPill.tsx` | deleted |
 | `web/src/lib/activity.ts` | `needsUser(activity)` → `needsAttention(activity, unansweredQuestions)`; two leaves removed (lifecycle-ui.md §1.1) |
 | `web/src/components/common/SidebarListItem.tsx` | the second indicator (lifecycle-ui.md §2.1) |

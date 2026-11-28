@@ -15,7 +15,7 @@ pnpm run test:browser    # 真浏览器测试（Chromium + WebKit；首次运行
 pnpm exec tsc -b         # 类型检查
 ```
 
-`src/types/wire.generated.ts` 是 history 记录与 live event 的类型，由 Go 的 `agent.WireTypes` 生成，**不要手改**（也不在 Biome 的范围内）。改了 Go 侧之后在 `server/` 下跑 `UPDATE_WIRE_TYPES=1 go test ./agent/wirets` 重新生成，再 `tsc -b` 看前端哪里要跟着改；文件过期时 server 的 `go test` 会失败。把记录转换成前端自己的形状只在 `lib/messageReducer.ts` 的 `normalizeEvent` 里做（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#the-clients-copy-is-generated)）。
+`src/types/wire.generated.ts` 是 history 记录与 live event 的类型，由 Go 的 `agent.WireTypes` 生成，**不要手改**（也不在 Biome 的范围内）。改了 Go 侧之后在 `server/` 下跑 `UPDATE_WIRE_TYPES=1 go test ./agent/wirets` 重新生成，再 `tsc -b` 看前端哪里要跟着改；文件过期时 server 的 `go test` 会失败。前端并不直接读记录：聊天记录以 projection 的 item 送达，page / update / delta 的形状手写在 `src/types/chatItems.ts`（对照 `server/projection`，生成器不覆盖，server 加字段时要手动跟上），`wire.generated.ts` 只提供 item 里嵌套的载荷类型。把 item 转换成前端自己的形状（`Message` / `ContentPart` / `ToolRun`）只在 `lib/transcript.ts` 里做，item 本身由 `lib/chatItems.ts` 原样保存（见 [docs/code/frontend-state.md](../docs/code/frontend-state.md#the-transcript)、[docs/code/agent-integration.md](../docs/code/agent-integration.md#the-clients-copy-is-generated)）。
 
 ```bash
 # 本项目没有 lint / format 脚本，统一在仓库根目录执行（理由见根 AGENTS.md）

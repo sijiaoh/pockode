@@ -42,7 +42,8 @@ Three problems, and only one of them was a drawing problem:
 art. Four of its decisions are taken here:
 
 - **State is a field on the call, not something the renderer infers.** The
-  reducer is the only author; the view switches on it and guesses nothing.
+  server's projection derives it and the client's transcript is the only author
+  of the run the view draws; the view switches on it and guesses nothing.
 - **Timestamps are on the call**, which is what lets a running row show elapsed
   seconds — the cheapest possible "this is still going" signal — and a finished
   one how long it took. Pockode's are the server's, not the client's; see
@@ -104,14 +105,14 @@ running" holds on either. What is asymmetric is everything around that:
 approval that gates it.** Claude sends the `tool_call` first and then asks;
 Codex may ask before it announces the item at all. Both orders are real and both
 have to work — an assumption of either one alone produces a row spinning above
-or below a card that is waiting for a person. What the reducer does about it is
-in [code/frontend-state.md](code/frontend-state.md#tool-runs); the fact is
+or below a card that is waiting for a person. The server's projection folds
+both orders into one item, and how the client draws it is in
+[code/frontend-state.md](code/frontend-state.md#tool-runs); the fact is
 recorded here because it is a property of the engines, not of the client.
 
 **Claude 2.1.263 does not re-send the `tool_call` after approval** (measured,
 three runs: one `tool_call`, one `permission_request`, one `tool_result`). An
-older CLI did, and a comment in the reducer still described that world. Nothing
-here may assume a second announcement arrives.
+older CLI did. Nothing here may assume a second announcement arrives.
 
 ### Codex items beyond commands, patches and MCP
 
@@ -262,8 +263,10 @@ says what is true now.*
 | `tool_activity` | **no** | what a call that has not returned is doing right now |
 | `text` / `tool_call` / `tool_result` + `parent_tool_use_id` | yes | …and it happened inside *that* subagent call, not in the main conversation |
 
-And one derived object, `ToolRun`, that the message reducer maintains and the UI
-renders without inferring anything.
+And one derived object, `ToolRun`: the server's projection folds the records
+into a tool item ([agent-integration.md](code/agent-integration.md#the-history-projection)),
+the client's transcript builds the run from it, and the UI renders that without
+inferring anything.
 
 ### `ToolRun`
 
@@ -273,11 +276,11 @@ interface ToolRun {
     name: string               // engine-neutral: Bash, Edit, Read, server:tool, …
     input: unknown             // complete, never truncated
     status: ToolRunStatus
-    /** The latest one-line status of a call still running. Live state: absent on replay. */
+    /** The latest one-line status of a call still running. Live state: absent from history. */
     activity?: string
     /** The tail of a running call's output, if the engine streams one. Live state. */
     output?: string
-    /** How many first lines `output` has lost to the reducer's 200-line cap. Live state. */
+    /** How many first lines `output` has lost to the client's 200-line cap. Live state. */
     outputDroppedLines?: number
     result?: string
     /** The placeholder a backgrounded call handed back, kept beside the outcome. */
@@ -326,7 +329,8 @@ interface WorkRef {
 }
 ```
 
-Status is derived from the records, never sent:
+Status is derived from the records by the server's projection, and sent as the
+tool item's `status`, which the run's is read from:
 
 | Status | Derived from |
 |---|---|
@@ -336,8 +340,9 @@ Status is derived from the records, never sent:
 | `error` | a result with `is_error` true — including a `background_lost`, which is one by construction, when it reaches a run still `background` |
 | `interrupted` | the turn was cut short, or the process ended under background work; a result arriving afterwards does not undo it |
 
-The exact reducer rules, and what replay can and cannot settle, are in
-[code/frontend-state.md](code/frontend-state.md#tool-runs). Deliberate omissions,
+How the item's statuses are read onto the row's, and which are drawn as a card
+instead, is in [code/frontend-state.md](code/frontend-state.md#tool-runs).
+Deliberate omissions,
 each with a reason:
 
 - **No `title` or `detail` field.** Both are derived from `name` and `input` on
@@ -352,8 +357,8 @@ each with a reason:
   that only has to be kept in sync.
 - **No permission field.** It stays its own part, with its own lifetime and its
   own buttons.
-- **No status field on any record.** Every input to the derivation above is a
-  record the client already has.
+- **No status field on any record.** Every input to the derivation above is
+  already in the history the projection folds.
 
 ### Observed times and reported durations
 
@@ -413,7 +418,7 @@ Three things this is deliberately not:
   fetch is a tool run of its own like any other. This field points *from* one run
   *to* another; it does not merge them.
 - **Not a `tool_result` on the original call.** That was the tempting shortcut
-  and it is wrong twice over: the reducer lets a later result supersede an
+  and it is wrong twice over: a later result supersedes an
   earlier one, so the original call's real outcome would be overwritten by
   something the agent never read — and it would settle on the wire what the row
   should show, which is the frontend's decision everywhere else in this document
@@ -450,7 +455,7 @@ still runs and for every history they wrote. How 2.1.330 reads a background
 task's output instead — a `Read` of its `output_file`, or `Monitor` — is
 unmeasured, and filing such a read under its origin is a separate decision.
 
-**A fetch in flight is state the reducer holds.**
+**A fetch in flight is state its item holds.**
 `TaskOutput` blocks for up to 30 seconds by default, and a fetch filed under its
 origin draws no row, so for those seconds nothing said the agent was waiting
 on it. The entry is therefore created `running` when the `tool_call` is filed,
@@ -459,20 +464,18 @@ answer, which is a returned fetch and not a missing one. It becomes
 `interrupted` exactly where a running run would: the turn's interrupt, a Stop's
 sweep, the process ending — on a `background` run too, whose task outlives the
 turn while the call reading it does not. A result reaching an interrupted fetch
-is kept and does not make it `returned`, as with a run. Replay settles it the same way: a fetch whose turn
-history shows ended without its result reads `interrupted`, while one reloaded
-in the middle of its own turn is still `running`, exactly as a run would be —
-the state is derived from records and endings, not from whether a result
-happens to be loaded. `waits` is read off the fetch's own input (`block`, true
+is kept and does not make it `returned`, as with a run. Being the fetch's own
+item, its state is the projection's like any run's: a fetch whose turn ended
+without its result reads `interrupted`, while one reloaded in the middle of its
+own turn is still `running`. `waits` is read off the fetch's own input (`block`, true
 when absent) and only chooses a word. `seenAt` is a run's `seenAt` for the
-fetch's own `tool_call`: when this client saw it arrive, or its `observed_at`
-carried over through the history page's `server_time` on a reload, and absent
+fetch's own item: when this client saw it start, or its `started_at` carried
+over through the history page's `server_time` on a reload, and absent
 without either — then no counter is drawn
 ([above](#observed-times-and-reported-durations)).
 
 What the frontend does with it — when a fetch is filed under the row it names,
-when it keeps a row of its own, and why that is decided as the call arrives
-rather than when its result does — is in
+and when it keeps a row of its own — is in
 [code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads).
 
 ### A call on Pockode's own work
@@ -578,15 +581,16 @@ written as a union with `ActivatesSession`, answering it `true` while
 is what an allowlist is for.
 
 **A client that subscribes mid-run has missed everything it was not listening
-for**, and on a phone that is the normal case, not an edge. So the process also
-keeps the newest activity per in-flight `tool_use_id` and hands it to a client
-that subscribes ([agent-chat.md](agent-chat.md#history-paging)). The map is
-bounded by the calls actually in flight: an entry is dropped when the run
-*settles*, and not on a backgrounded call's first result, since that one is the
-placeholder and all the progress worth keeping arrives after it. Only the
-activity line is kept, never the output deltas: one chunk of stdout is not the
-tail of anything, and the tail a reconnecting client wants arrives with the next
-delta or with the result.
+for**, and on a phone that is the normal case, not an edge. So the chat watcher
+keeps each in-flight call's stream — its newest activity line, its subagent
+progress and the output it has streamed — and hands it to a client that
+subscribes, with the deltas after continuing it exactly
+([agent-chat.md](agent-chat.md#live-updates)). It is bounded by the calls
+actually in flight: a stream ends when the call's item is no longer in flight —
+which the projection says, not a `tool_result` — so a backgrounded call's
+placeholder result does not end it, since all the progress worth keeping arrives
+after it. The output kept is bounded too (its tail, past a megabyte): the whole
+of it arrives with the result.
 
 ### Background lives on `tool_result`, twice
 
@@ -612,11 +616,10 @@ carries that subtype is `background`; the outcome record supersedes it and
 settles the run.
 
 Reusing the type rather than adding one is the same argument `MessageOrigin` made
-for not adding a message type: the reducer already joins a `tool_result` to its
-call by id, overwriting is exactly the wanted behaviour, `prependHistoryPage`
-already replays tool results over older pages as "update it wherever it is", and
-history is append-only so the later record wins on every path without anyone
-ordering it. A new type would fork all three for no behavioural gain.
+for not adding a message type: the projection already joins a `tool_result` to
+its call by id, overwriting is exactly the wanted behaviour, and history is
+append-only so the later record wins on every path without anyone ordering it.
+A new type would fork both for no behavioural gain.
 
 Being a result does not make the outcome record a turn signal. It says how the
 work ended, not anything the model said, so it neither ends a
@@ -727,7 +730,8 @@ model is this:
 - **A settled subagent settles what it leaves running.** A child still
   `running` when its parent settles is `interrupted` with it; a backgrounded
   child keeps its own lifecycle and settles by its own notification. The rules
-  belong to the reducer ([code/frontend-state.md](code/frontend-state.md#a-subagents-children)).
+  belong to the server's projection; how the client draws the nesting is
+  [code/frontend-state.md](code/frontend-state.md#a-subagents-children).
 
 Codex names the parent too: a subagent runs in a thread of its own, and the
 adapter stamps that thread's items with the id of the spawn call it saw start

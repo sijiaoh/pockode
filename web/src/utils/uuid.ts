@@ -6,7 +6,7 @@
  * the server running on a laptop on the same network. What breaks without it is
  * not a corner: every subscription names itself with one of these before it can
  * be opened (no live views at all), and every message sent from this client is
- * identified by one (see messageReducer).
+ * identified by one until the transcript holds it (see `Echo` in lib/chatItems).
  *
  * `crypto.getRandomValues` carries no such restriction, so the fallback is the
  * same randomness laid out by hand (RFC 4122 §4.4: version in the high nibble

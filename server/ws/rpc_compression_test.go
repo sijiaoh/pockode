@@ -22,6 +22,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/watch"
 )
 
 // browserOffer is what Chrome and Firefox put on the upgrade request. Its
@@ -474,11 +475,11 @@ func TestStreamedNotificationsShareACompressionWindow(t *testing.T) {
 	c.call(2, "chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{ID: "client-1", SessionID: sessionID})
 
 	const events = 20
-	event := agent.TextEvent{Content: strings.Repeat("a streamed chat event. ", 6)}
+	event := agent.ThinkingDeltaLiveEvent{ContentDelta: strings.Repeat("a streamed chat event. ", 6)}
 	var first, last int
 	for i := 0; i < events; i++ {
-		wt.ChatMessagesWatcher.Enqueue(sessionID, event.Encode(), session.NoHistorySeq, nil)
-		msg := c.receiveNotification("chat.text")
+		wt.ChatMessagesWatcher.Enqueue(sessionID, event, session.NoHistorySeq, nil)
+		msg := c.receiveNotification(watch.ChatDeltaMethod)
 		if len(msg.data) >= 444 {
 			t.Fatalf("notification is %d bytes, which is at or above the median real event; "+
 				"this test only says something about the threshold if it stays under it", len(msg.data))

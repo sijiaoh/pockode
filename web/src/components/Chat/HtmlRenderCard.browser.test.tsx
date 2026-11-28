@@ -16,7 +16,16 @@ import {
 	resetChatUIConfig,
 	setChatUIConfig,
 } from "../../lib/registries/chatUIRegistry";
+import {
+	msg,
+	resetItems,
+	text,
+	tool,
+	page as transcriptPage,
+	turn,
+} from "../../test/chatItemsFixture";
 import { renderTranscript } from "../../test/transcriptFixture";
+import type { ChatPage } from "../../types/chatItems";
 import { FullScreenHost } from "./FullScreenHost";
 import { HtmlRenderCard } from "./HtmlRenderCard";
 
@@ -71,20 +80,21 @@ beforeEach(() => {
 	reports = [];
 });
 
-function pageRecords(html: string): unknown[][] {
+function pageRecords(html: string): ChatPage[] {
+	resetItems();
 	return [
-		[
-			{ type: "message", content: "Show me the table" },
-			{ type: "text", content: PROSE },
-			{
-				type: "tool_call",
-				tool_use_id: "page-1",
-				tool_name: "mcp__pockode__html_render",
-				tool_input: { title: TITLE, html },
-			},
-			{ type: "tool_result", tool_use_id: "page-1", tool_result: "p1" },
-			{ type: "done" },
-		],
+		transcriptPage([
+			turn(
+				{},
+				msg("Show me the table"),
+				text(PROSE),
+				tool(
+					"mcp__pockode__html_render",
+					{ title: TITLE, html },
+					{ tool_use_id: "page-1", result: { text: "p1" } },
+				),
+			),
+		]),
 	];
 }
 

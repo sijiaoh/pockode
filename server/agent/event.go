@@ -564,8 +564,8 @@ type SubagentReport struct {
 }
 
 // SubagentProgress is how far a running subagent has come. Live state: it
-// travels on tool_activity, which is never recorded, and the process keeps the
-// newest for a client that subscribes mid-run.
+// travels on tool_activity, which is never recorded, and the chat watcher keeps
+// the newest for a client that subscribes mid-run (rpc.ChatStreams).
 type SubagentProgress struct {
 	SubagentCounts
 	// LastToolName is the tool the subagent called most recently.

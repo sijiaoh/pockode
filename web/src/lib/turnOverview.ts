@@ -6,9 +6,9 @@ import type {
 	ToolRunPlan,
 	TurnPhase,
 } from "../types/message";
-import { openAssistantIndex } from "./messageReducer";
 import { isLiveRun } from "./subagentRun";
 import { isTaskTool } from "./toolSummary";
+import { openAssistantIndex } from "./transcript";
 import { perMessage, perTranscript } from "./transcriptMemo";
 
 /**

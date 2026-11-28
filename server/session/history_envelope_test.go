@@ -3,7 +3,6 @@ package session
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -37,19 +36,15 @@ func newStoreWithSession(t *testing.T, sessionID string) (*FileStore, string) {
 	return store, dir
 }
 
-// pageSeqs is the seqs a client is handed for the whole history, newest page
-// big enough to hold it all.
+// pageSeqs is the seq of each record of the whole history, NoHistorySeq for
+// one in no file: what every seq a client is handed names.
 func pageSeqs(t *testing.T, reader Reader, sessionID string) []HistorySeq {
 	t.Helper()
 	records, err := reader.GetHistory(ctx, sessionID)
 	if err != nil {
 		t.Fatalf("GetHistory failed: %v", err)
 	}
-	page, err := PageHistory(records, NoHistorySeq, MaxHistoryPageSize)
-	if err != nil {
-		t.Fatalf("PageHistory failed: %v", err)
-	}
-	return seqsOf(t, page.Records)
+	return HistorySeqs(records)
 }
 
 // A file written before seqs were stored is numbered exactly as positions
@@ -167,26 +162,6 @@ func TestHistory_GapsInStoredSeqs(t *testing.T) {
 
 	if got, want := pageSeqs(t, store, "gaps"), []HistorySeq{1, 2, 5}; !reflect.DeepEqual(got, want) {
 		t.Errorf("seqs = %v, want %v", got, want)
-	}
-
-	page, err := PageHistory(records, 5, 1)
-	if err != nil {
-		t.Fatalf("PageHistory(before=5) failed: %v", err)
-	}
-	if got := seqsOf(t, page.Records); !reflect.DeepEqual(got, []HistorySeq{2}) || page.NextBeforeSeq != 2 {
-		t.Errorf("before 5: seqs %v, next %d; want [2], next 2", got, page.NextBeforeSeq)
-	}
-
-	// A seq in the gap names nothing, but "older than it" still means something.
-	page, err = PageHistory(records, 4, 10)
-	if err != nil {
-		t.Fatalf("PageHistory(before=4) failed: %v", err)
-	}
-	if got := seqsOf(t, page.Records); !reflect.DeepEqual(got, []HistorySeq{1, 2}) {
-		t.Errorf("before 4: seqs %v, want [1 2]", got)
-	}
-	if _, err := PageHistory(records, 6, 10); !errors.Is(err, ErrInvalidHistoryCursor) {
-		t.Errorf("before 6 (past the newest): err = %v, want ErrInvalidHistoryCursor", err)
 	}
 
 	if i, found := FindHistorySeq(records, 5); !found || i != 2 {
@@ -326,29 +301,6 @@ func TestAppendToHistory_LineIsTheRecordPlusTheEnvelope(t *testing.T) {
 	}
 }
 
-// What a client is sent of a stored record is its seq and its own fields: the
-// format version is the file's, and a replayed record reads like the
-// notification it was first sent as.
-func TestPageHistory_SendsTheSeqWithoutTheFormatVersion(t *testing.T) {
-	records := []json.RawMessage{
-		json.RawMessage(`{"seq":1,"v":2,"type":"text","content":"new"}`),
-		json.RawMessage(`{"type":"text","content":"old"}`),
-	}
-	page, err := PageHistory(records, NoHistorySeq, 10)
-	if err != nil {
-		t.Fatalf("PageHistory failed: %v", err)
-	}
-	want := []string{
-		`{"seq":1,"type":"text","content":"new"}`,
-		`{"seq":2,"type":"text","content":"old"}`,
-	}
-	for i, raw := range page.Records {
-		if string(raw) != want[i] {
-			t.Errorf("record %d = %s, want %s", i, raw, want[i])
-		}
-	}
-}
-
 // The turn a record belongs to is the third envelope field, and has three
 // values: a turn, none (null), or nothing said at all — a message, and every
 // line from before turns had ids. A reader tells them apart without parsing the
@@ -389,15 +341,6 @@ func TestAppendToHistory_StoresTheTurnInTheEnvelope(t *testing.T) {
 		t.Errorf("seqs = %v, want the stored ones", seqs)
 	}
 
-	page, err := PageHistory(records, NoHistorySeq, 10)
-	if err != nil {
-		t.Fatalf("PageHistory failed: %v", err)
-	}
-	for _, raw := range page.Records {
-		if bytes.Contains(raw, []byte(`"turn"`)) {
-			t.Errorf("client is sent %s, want the turn left in the file", raw)
-		}
-	}
 }
 
 // A fork's copy holds the same turns as the records it copied, so each keeps

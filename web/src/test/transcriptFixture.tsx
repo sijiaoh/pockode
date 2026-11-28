@@ -3,16 +3,17 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { expect } from "vitest";
 import MessageList from "../components/Chat/MessageList";
 import { useChatMessages } from "../hooks/useChatMessages";
+import type { ChatNotification, ChatPage } from "../types/chatItems";
 import {
 	answerPageRequest,
 	chatHistoryRequests,
 	resetChatHistoryServer,
-	streamRecords,
+	streamUpdates,
 } from "./chatHistoryServer";
 
 export interface TranscriptOptions {
-	/** The session's history records cut into pages, oldest page first. */
-	pages: unknown[][];
+	/** The session's transcript cut into pages, oldest page first. */
+	pages: ChatPage[];
 	/** The height of the box the transcript fills, in CSS pixels. */
 	height?: number;
 	/** Its width, in CSS pixels; the window's when absent. */
@@ -30,7 +31,7 @@ export interface RenderedTranscript {
 	 * Answers the page request in flight, and lets the list react. `live` is
 	 * output that arrives in the same commit as the page.
 	 */
-	landPage: (live?: unknown[]) => Promise<void>;
+	landPage: (live?: ChatNotification[]) => Promise<void>;
 	/**
 	 * Lets the list react to a change the test made to the page itself — a box
 	 * settling on its size, which reaches the list through no commit at all.
@@ -113,8 +114,7 @@ async function rest() {
  * The newest page is what subscribing returns; each older one is asked for by
  * the list itself, as the reader scrolls up, and comes back only when the test
  * lands it. Where the pages are cut is the point: a cut inside an assistant
- * turn is what makes `prependHistoryPage` splice a page into the bubble on
- * screen.
+ * turn puts the page's items into the bubble on screen.
  */
 export async function renderTranscript({
 	pages,
@@ -153,7 +153,7 @@ export async function renderTranscript({
 				if (!answerPageRequest()) {
 					throw new Error("no page request is in flight");
 				}
-				streamRecords(live);
+				streamUpdates(live);
 				await new Promise((resolve) => setTimeout(resolve));
 			});
 			await settle();

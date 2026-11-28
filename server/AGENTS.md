@@ -74,7 +74,7 @@ middleware/             # 密码 / session token 认证中间件
 password/               # 服务器密码的来源（--password / POCKODE_PASSWORD + 弃用别名）与比较（各认证入口共用）；经环境变量把密码交给另一个 pockode 进程（WithEnv：集群启动的节点、重启后的自己；ClearFlags 清空重放命令行里的密码参数）
 permreview/             # Unattended session 的权限审查：把权限请求路由给审查 session、应用 permission_verdict 的结论（见 docs/unattended-mode.md）
 process/                # 进程管理器
-projection/             # 历史记录的投影：对 history 记录的纯 fold（turn、每次工具调用一个 item（状态、权限请求与结论、后台结果、subagent 嵌套）、问题及其结局、当前 plan、被丢弃的消息与读点），旧格式在进入时统一归一化；任意前缀可 fold、可增量 append，仅内存；live.go 的 `Live` 只为活跃的 session（有进程或有聊天订阅者，经 `Hold` 计数）持有并随 store 的写入（`session.HistoryObserver`）保持最新，无人持有的 session 每次现 fold，`FromReader` 给只读的 DirReader 每次现 fold（见 docs/code/agent-integration.md#the-history-projection）
+projection/             # 历史记录的投影：对 history 记录的纯 fold（turn、每次工具调用一个 item（状态、权限请求与结论、后台结果、subagent 嵌套）、问题及其结局、当前 plan、被丢弃的消息与读点），旧格式在进入时统一归一化；任意前缀可 fold、可增量 append，仅内存；live.go 的 `Live` 为活跃的 session（有进程或有聊天订阅者，经 `Hold` 计数）持有并随 store 的写入（`session.HistoryObserver`）保持最新，最后一个持有者放手后、以及无人持有的 session 被读之后再保留 `DefaultLinger`（2 分钟，每次读顺延），之后放掉、下次读时现 fold，folds.go 的 `Folds` 给未加载 worktree 的只读 DirReader（`worktree.Manager.SessionProjections`）保留 fold 的结果，每次读先按 `session.HistoryVersion`（文件的身份、大小、修改时间）核对、变了就现 fold，同样未读 `DefaultLinger` 后放掉；`FromReader` 每次现 fold、什么都不留（见 docs/code/agent-integration.md#the-history-projection）
 relay/                  # NAT 穿透：yamux over WSS 隧道 + 本地反向代理 + 端口预览（认证与转发）
 selfinstall/            # 把一个 release 装到磁盘上的可执行文件位置（下载 → 用同一 release 的 checksums.txt 校验 → 跑 --version → rename 替换；只换文件不重启，同一 OS 用户同时只有一次安装；server 与 cluster 共用，见 docs/code/self-update.md）
 serverinfo/             # 服务器运行时信息（server.json）

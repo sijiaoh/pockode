@@ -36,10 +36,12 @@ import (
 	"github.com/pockode/server/internal/authsessiontest"
 	"github.com/pockode/server/internal/cloudlinktest"
 	"github.com/pockode/server/internal/unwritabletest"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/watch"
 	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
@@ -447,9 +449,55 @@ func (e *testEnv) sendMessage(sessionID, content string) rpc.MessageResult {
 // awaitResponseComplete drains notifications until the agent has finished
 // answering, which is what callers actually need before inspecting the
 // resulting state.
+// chatUpdate is a chat.update as a client reads it.
+type chatUpdate struct {
+	ID string `json:"id"`
+	projection.Update
+}
+
+// awaitUpdate waits for a chat.update that satisfies match.
+func (e *testEnv) awaitUpdate(match func(chatUpdate) bool) chatUpdate {
+	e.t.Helper()
+	for {
+		notif := e.awaitNotification(watch.ChatUpdateMethod)
+		var u chatUpdate
+		if err := json.Unmarshal(notif.Params, &u); err != nil {
+			e.t.Fatalf("unmarshal %s params: %v", notif.Method, err)
+		}
+		if match(u) {
+			return u
+		}
+	}
+}
+
+// awaitItem waits for an update carrying an item of kind and returns the
+// first such item.
+func (e *testEnv) awaitItem(kind projection.ItemKind) projection.PageItem {
+	e.t.Helper()
+	var found projection.PageItem
+	e.awaitUpdate(func(u chatUpdate) bool {
+		for _, it := range u.Items {
+			if it.Item.Kind == kind {
+				found = it.Item
+				return true
+			}
+		}
+		return false
+	})
+	return found
+}
+
+// awaitResponseComplete waits for the update that ends a turn.
 func (e *testEnv) awaitResponseComplete() {
 	e.t.Helper()
-	e.awaitNotification("chat.done")
+	e.awaitUpdate(func(u chatUpdate) bool {
+		for _, t := range u.Turns {
+			if t.Turn.Ended {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func (e *testEnv) skipN(n int) {
@@ -989,8 +1037,8 @@ func TestHandler_ChatMessagesSubscribe_TurnState(t *testing.T) {
 // The other half of what a reconnecting client needs: a tool_activity event is
 // never recorded, so a client that subscribes after one arrived can only learn
 // what a long-running call is doing from the reply itself. On a phone that is
-// the normal case — see rpc.ChatMessagesSubscribeResult.ToolActivity.
-func TestHandler_ChatMessagesSubscribe_CarriesLiveToolActivity(t *testing.T) {
+// the normal case — see rpc.ChatMessagesSubscribeResult.Streams.
+func TestHandler_ChatMessagesSubscribe_CarriesLiveStreams(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
 			agent.ToolCallEvent{ToolUseID: "call-1", ToolName: "Bash"},
@@ -1009,8 +1057,8 @@ func TestHandler_ChatMessagesSubscribe_CarriesLiveToolActivity(t *testing.T) {
 
 	// A second client, arriving after every one of those events.
 	result := env.subscribeChatMessages("sess")
-	if got := result.ToolActivity["call-1"]; got != "tick 3 of 6" {
-		t.Errorf("tool_activity[call-1] = %q, want the last thing the call reported", got)
+	if got := result.Streams.Tools["call-1"].Activity; got != "tick 3 of 6" {
+		t.Errorf("streams.tools[call-1].activity = %q, want the last thing the call reported", got)
 	}
 }
 
@@ -1043,21 +1091,27 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 	env.sendMessage("sess", "Hello AI")
 
 	// The agent's output must reach the client in order: awaiting the text first
-	// fails if done overtakes it, because done would be consumed on the way.
-	text := env.awaitNotification("chat.text")
-	done := env.awaitNotification("chat.done")
+	// fails if the turn's end overtakes it, because it would be consumed on the
+	// way.
+	var updates []chatUpdate
+	env.awaitUpdate(func(u chatUpdate) bool {
+		updates = append(updates, u)
+		for _, it := range u.Items {
+			return it.Item.Kind == projection.KindText
+		}
+		return false
+	})
+	env.awaitUpdate(func(u chatUpdate) bool {
+		updates = append(updates, u)
+		return len(u.Turns) > 0 && u.Turns[0].Turn.Ended
+	})
 
-	// Addressed to the id the client chose: the client routes chat events by it
-	// alone, and it is the only id either side ever had for this subscription.
-	for _, notif := range []rpcNotification{text, done} {
-		var params struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(notif.Params, &params); err != nil {
-			t.Fatalf("unmarshal %s params: %v", notif.Method, err)
-		}
-		if params.ID != subID {
-			t.Errorf("%s addressed to %q, want %q", notif.Method, params.ID, subID)
+	// Addressed to the id the client chose: the client routes chat updates by
+	// it alone, and it is the only id either side ever had for this
+	// subscription.
+	for _, u := range updates {
+		if u.ID != subID {
+			t.Errorf("update through %d addressed to %q, want %q", u.ThroughSeq, u.ID, subID)
 		}
 	}
 }
@@ -1108,18 +1162,16 @@ func TestHandler_PermissionRequest(t *testing.T) {
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "run ls")
-	notif := env.awaitNotification("chat.permission_request")
-
-	var params rpc.PermissionRequestParams
-	if err := json.Unmarshal(notif.Params, &params); err != nil {
-		t.Fatalf("failed to unmarshal params: %v", err)
+	// The request reaches the client as the call it holds back.
+	item := env.awaitItem(projection.KindTool)
+	if item.Tool.Status != projection.ItemAwaitingPermission || item.Tool.Permission == nil {
+		t.Fatalf("tool item = %+v, want it awaiting its permission", item.Tool)
 	}
-
-	if params.RequestID != "req-123" {
-		t.Errorf("expected request_id 'req-123', got %q", params.RequestID)
+	if item.Tool.Permission.RequestID != "req-123" {
+		t.Errorf("expected request_id 'req-123', got %q", item.Tool.Permission.RequestID)
 	}
-	if params.ToolName != "Bash" {
-		t.Errorf("expected tool_name 'Bash', got %q", params.ToolName)
+	if item.Tool.ToolName != "Bash" {
+		t.Errorf("expected tool_name 'Bash', got %q", item.Tool.ToolName)
 	}
 }
 
@@ -1941,8 +1993,9 @@ func TestHandler_ChatMessagesSubscribe_History(t *testing.T) {
 
 	result := env.subscribeChatMessages(sess.ID)
 
-	if len(result.History) != 1 {
-		t.Errorf("expected 1 history record, got %d", len(result.History))
+	items := itemsOf(result.Page)
+	if len(items) != 1 || items[0].Message == nil || items[0].Message.Content != "hello" {
+		t.Errorf("transcript = %+v, want the one message", items)
 	}
 }
 

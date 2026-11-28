@@ -13,7 +13,6 @@ import { IDLE_TAIL, TurnTailContext } from "./turnTailContext";
 const thinking = (overrides: Partial<LiveThinking> = {}): LiveThinking => ({
 	content: "",
 	fullReasoning: "",
-	joinedLate: false,
 	...overrides,
 });
 
@@ -152,7 +151,6 @@ describe("TurnTail", () => {
 		const value = (expanded: boolean) => ({
 			thinking: thinking({
 				content: "**Plan**\n\nChecking how it retries",
-				joinedLate: true,
 			}),
 			panel: { expanded, onToggle },
 		});
@@ -176,10 +174,6 @@ describe("TurnTail", () => {
 		expect(line).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText("Thinking so far")).toBeInTheDocument();
 		expect(screen.getByText("Plan")).toBeInTheDocument();
-		// The deltas before this client subscribed are gone, and it says so.
-		expect(
-			screen.getByText("Earlier thinking appears in full when it finishes."),
-		).toBeInTheDocument();
 	});
 
 	// The clock follows the word, where a changing latest line cannot push it

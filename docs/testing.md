@@ -356,11 +356,12 @@ become better by moving here.
 **The transcript fixture.** `renderTranscript` in
 `web/src/test/transcriptFixture.tsx` renders the real `MessageList`, fed by the
 real `useChatMessages`, in a box of fixed height. A test gives it a session's
-history records cut into pages. Subscribing returns the newest page. Each older
+transcript as the server would page it — `ChatPage`s built with
+`web/src/test/chatItemsFixture.ts`. Subscribing returns the newest page. Each older
 page is asked for by the list itself as the reader scrolls up, and arrives only
-when the test calls `landPage()`. `landPage(live)` delivers `live` records to the
-subscription in the same commit as the page — output landing at the end while a
-page lands above, which is the case a total-height measure gets wrong. `settle()`
+when the test calls `landPage()`. `landPage(live)` delivers `live` notifications
+(`chat.update` / `chat.delta`) to the subscription in the same commit as the
+page — output landing at the end while a page lands above, which is the case a total-height measure gets wrong. `settle()`
 lets the list react to a size change the test made to the page directly, such as
 a box growing, which reaches the list through no commit at all. The list puts
 its track right only once the view is at rest
@@ -419,6 +420,12 @@ and its knobs are on that config; the results land in `web/bench-results/`.
 
 Every case runs over the same open turn twice, once with no history before it
 and once with the long session — the difference is what loaded history costs.
+A second pass, `-t "pages back"`, mounts the session's newest 50-record page
+and times each older page from its answer to its layout (`BENCH_PAGES` of
+them). The server's side of the same session — a subscribe's page held and
+cold, an older page, an older page of a worktree that is not loaded (kept
+and not), the fold, and a live record's `chat.update` — is
+`go test ./projection -run '^$' -bench LongSession -benchmem`.
 What to know before comparing two runs:
 
 - **Compare medians of more than one run.** Two runs of unchanged code on an
@@ -428,6 +435,14 @@ What to know before comparing two runs:
   machine an hour and a half apart. A baseline from an earlier sitting is no
   reference; run the old commit again in a worktree of its own (with the bench
   files copied in) next to the new one.
+- **Against a commit before the item store, give its stub an open turn.** The
+  stub's subscribe answers with an idle `turn`. The old client closed every
+  streaming bubble on that, so each live record opened a fresh, nearly empty
+  one; the current client takes whether the turn is open from the page and
+  appends into the open turn's real bubble. Left as it is, the text and
+  top-level-call cases compare a 34-part bubble with an empty one and read as
+  twice as slow. Patch the old stub's `turn` to `{ phase: "running", open:
+  true }` before comparing.
 - **Say which React build.** The tests' development build inflates render and
   context propagation several times over; `BENCH_REACT=production` uses the
   production profiling build, and every result file names the one it ran on.

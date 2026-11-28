@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/worktree"
@@ -61,20 +62,24 @@ func (e *testEnv) chatHistoryPage(sessionID string, before session.HistorySeq, l
 	return result
 }
 
-// contentsOf reads the records back as the client sees them: the text it would
-// render, paired with the address it would quote to ask for more.
-func contentsOf(t *testing.T, records []json.RawMessage) []string {
-	t.Helper()
-	out := make([]string, len(records))
-	for i, raw := range records {
-		var rec struct {
-			Content string             `json:"content"`
-			Seq     session.HistorySeq `json:"seq"`
+// contentsOf reads a page's text items back as the client sees them: the text
+// it would render, paired with the address it would quote to ask for more.
+func contentsOf(page projection.Page) []string {
+	var out []string
+	for _, turn := range page.Turns {
+		for _, item := range turn.Items {
+			if item.Text != nil {
+				out = append(out, fmt.Sprintf("%s@%d", item.Text.Content, item.Seq))
+			}
 		}
-		if err := json.Unmarshal(raw, &rec); err != nil {
-			t.Fatalf("record %d is not an object: %v", i, err)
-		}
-		out[i] = fmt.Sprintf("%s@%d", rec.Content, rec.Seq)
+	}
+	return out
+}
+
+func itemsOf(page projection.Page) []projection.PageItem {
+	var out []projection.PageItem
+	for _, turn := range page.Turns {
+		out = append(out, turn.Items...)
 	}
 	return out
 }
@@ -87,9 +92,9 @@ func TestChatMessagesSubscribe_ReturnsNewestPage(t *testing.T) {
 
 	result := env.subscribeChatMessagesWithLimit("sess", 3)
 
-	got := strings.Join(contentsOf(t, result.History), " ")
+	got := strings.Join(contentsOf(result.Page), " ")
 	if got != "m8@8 m9@9 m10@10" {
-		t.Fatalf("subscribe returned %q, want the newest three records", got)
+		t.Fatalf("subscribe returned %q, want the newest three items", got)
 	}
 	if !result.HasMore {
 		t.Error("HasMore = false, but seven older records exist")
@@ -105,8 +110,8 @@ func TestChatMessagesSubscribe_ShortHistoryHasNoMore(t *testing.T) {
 
 	result := env.subscribeChatMessagesWithLimit("sess", 50)
 
-	if len(result.History) != 2 {
-		t.Fatalf("subscribe returned %d records, want 2", len(result.History))
+	if got := len(itemsOf(result.Page)); got != 2 {
+		t.Fatalf("subscribe returned %d items, want 2", got)
 	}
 	if result.HasMore || result.NextBeforeSeq != session.NoHistorySeq {
 		t.Errorf("HasMore = %v, NextBeforeSeq = %d, want false and 0", result.HasMore, result.NextBeforeSeq)
@@ -137,7 +142,7 @@ func TestChatMessagesHistory_PagesBackToTheTop(t *testing.T) {
 	seedHistory(t, env, "sess", 7)
 
 	sub := env.subscribeChatMessagesWithLimit("sess", 3)
-	seen := contentsOf(t, sub.History)
+	seen := contentsOf(sub.Page)
 	hasMore, before := sub.HasMore, sub.NextBeforeSeq
 
 	for pages := 0; hasMore; pages++ {
@@ -145,7 +150,7 @@ func TestChatMessagesHistory_PagesBackToTheTop(t *testing.T) {
 			t.Fatal("paging did not terminate")
 		}
 		page := env.chatHistoryPage("sess", before, 3)
-		seen = append(contentsOf(t, page.History), seen...)
+		seen = append(contentsOf(page.Page), seen...)
 		hasMore, before = page.HasMore, page.NextBeforeSeq
 	}
 
@@ -171,7 +176,7 @@ func TestChatMessagesHistory_LiveEventsDoNotShiftOlderPages(t *testing.T) {
 	}
 
 	page := env.chatHistoryPage("sess", sub.NextBeforeSeq, 2)
-	if got := strings.Join(contentsOf(t, page.History), " "); got != "m3@3 m4@4" {
+	if got := strings.Join(contentsOf(page.Page), " "); got != "m3@3 m4@4" {
 		t.Fatalf("older page returned %q after a newer record was appended, want %q", got, "m3@3 m4@4")
 	}
 }
@@ -234,33 +239,26 @@ func TestChatMessage_ReplyNamesTheRecord(t *testing.T) {
 	reply := env.sendMessage("sess", "hello")
 
 	page := env.subscribeChatMessagesWithLimit("sess", 10)
-	if len(page.History) == 0 {
-		t.Fatal("history is empty, want the message record")
+	items := itemsOf(page.Page)
+	if len(items) == 0 {
+		t.Fatal("transcript is empty, want the message")
 	}
-	var rec struct {
-		Type       string             `json:"type"`
-		MessageID  string             `json:"message_id"`
-		Seq        session.HistorySeq `json:"seq"`
-		ObservedAt *time.Time         `json:"observed_at"`
+	item := items[0]
+	if item.Kind != projection.KindMessage || item.Message.MessageID == "" || item.Message.ObservedAt == nil {
+		t.Fatalf("first item = %+v, want the message carrying its id and moment", item)
 	}
-	if err := json.Unmarshal(page.History[0], &rec); err != nil {
-		t.Fatalf("unparseable record: %v", err)
-	}
-	if rec.Type != "message" || rec.MessageID == "" || rec.ObservedAt == nil {
-		t.Fatalf("first record = %+v, want the message carrying its id and moment", rec)
-	}
-	if reply.Seq != rec.Seq || reply.MessageID != rec.MessageID {
-		t.Errorf("reply named seq %d id %q, want the record's seq %d id %q",
-			reply.Seq, reply.MessageID, rec.Seq, rec.MessageID)
+	if reply.Seq != item.Seq || reply.MessageID != item.Message.MessageID {
+		t.Errorf("reply named seq %d id %q, want the item's seq %d id %q",
+			reply.Seq, reply.MessageID, item.Seq, item.Message.MessageID)
 	}
 	// The sender draws the reply this message opens from the reply alone, so it
 	// is told when that reply began — the record's moment, not one of its own.
-	if reply.ObservedAt == nil || !reply.ObservedAt.Equal(*rec.ObservedAt) {
-		t.Errorf("reply observed_at = %v, want the record's %v", reply.ObservedAt, *rec.ObservedAt)
+	if reply.ObservedAt == nil || !reply.ObservedAt.Equal(*item.Message.ObservedAt) {
+		t.Errorf("reply observed_at = %v, want the record's %v", reply.ObservedAt, *item.Message.ObservedAt)
 	}
 }
 
-// A call still running in the replayed history is counted from its observed_at
+// A call still running in a page is counted from its started_at
 // against the server's clock, never the phone's, so both replies carry a
 // reading of it.
 func TestChatMessages_RepliesCarryTheServerClock(t *testing.T) {

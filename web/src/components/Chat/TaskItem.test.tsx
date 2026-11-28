@@ -3,7 +3,6 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { countSteps, latestChild } from "../../lib/subagentRun";
 import type { ContentPart, ToolRun, ToolRunStatus } from "../../types/message";
 import {
 	InOpenTurnContext,
@@ -14,7 +13,6 @@ import { SubagentResumesContext } from "./subagentResumesContext";
 import { SubagentTranscriptContext } from "./subagentTranscriptContext";
 import TaskItem from "./TaskItem";
 import { PartBlocks } from "./ToolList";
-import { UnfiledChildrenContext } from "./unfiledChildrenContext";
 
 // A stand-in for the transcript's own part renderer, which TaskItem is handed
 // rather than imports: enough to tell which child went where. A nested Task is
@@ -472,19 +470,6 @@ describe("TaskItem", () => {
 			},
 			status: "pending",
 		});
-		// The row's unfiled children, as the transcript derives them.
-		const flat = (...parts: ContentPart[]) =>
-			new Map([
-				[
-					"t1",
-					{
-						parts,
-						count: parts.length,
-						steps: countSteps(parts),
-						latest: latestChild(parts),
-					},
-				],
-			]);
 		const openProcess = async (user: ReturnType<typeof userEvent.setup>) => {
 			await user.click(screen.getByRole("button", { name: /find usages/ }));
 			await user.click(screen.getByRole("button", { name: /^Process/ }));
@@ -999,44 +984,6 @@ describe("TaskItem", () => {
 			expect(
 				screen.getByRole("button", { name: /find usages/ }),
 			).toHaveAccessibleName(/2 tool uses/);
-		});
-
-		// Children that loaded flat before their call did stay where they
-		// are; the row still counts them and the process says where they went.
-		it("counts children that loaded before their call", async () => {
-			const user = userEvent.setup();
-			render(
-				<UnfiledChildrenContext
-					value={flat(read("u1"), read("u2"), text("Between."))}
-				>
-					<TaskItemWithChildren
-						run={task("success", { children: [read("c1")] })}
-					/>
-				</UnfiledChildrenContext>,
-			);
-			expect(screen.getByText("3 tool uses")).toBeVisible();
-			await openProcess(user);
-			expect(
-				screen.getByText(
-					"3 more from this subagent are further down, where they first loaded.",
-				),
-			).toBeVisible();
-		});
-
-		// The flat ones are the newest, so they say what it is doing now.
-		it("reads what it is doing from children that sit flat", () => {
-			render(
-				<UnfiledChildrenContext value={flat(text("Newest words."))}>
-					<TaskItemWithChildren
-						run={task("running", {
-							result: undefined,
-							children: [read("c1"), text("Old words.")],
-						})}
-					/>
-				</UnfiledChildrenContext>,
-			);
-			expect(screen.getByText("Newest words.")).toBeVisible();
-			expect(screen.queryByText("Old words.")).toBeNull();
 		});
 	});
 

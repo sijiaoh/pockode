@@ -100,37 +100,37 @@ const (
 // Permission is the permission request a call was held on and what became of
 // it.
 type Permission struct {
-	RequestID      string
-	Suggestions    []agent.PermissionUpdate
-	DecisionReason string
-	BlockedPath    string
-	Seq            session.HistorySeq
+	RequestID      string                   `json:"request_id"`
+	Suggestions    []agent.PermissionUpdate `json:"suggestions,omitempty"`
+	DecisionReason string                   `json:"decision_reason,omitempty"`
+	BlockedPath    string                   `json:"blocked_path,omitempty"`
+	Seq            session.HistorySeq       `json:"seq,omitempty"`
 
-	Status PermissionStatus
-	Choice agent.PermissionChoiceName
+	Status PermissionStatus           `json:"status"`
+	Choice agent.PermissionChoiceName `json:"choice,omitempty"`
 	// By and Review are who answered when it was not a person.
-	By     agent.PermissionResponder
-	Review *agent.PermissionReview
+	By     agent.PermissionResponder `json:"by,omitempty"`
+	Review *agent.PermissionReview   `json:"review,omitempty"`
 	// Always says a person answered Always Allow.
-	Always     bool
-	AnsweredAt *time.Time
+	Always     bool       `json:"always,omitempty"`
+	AnsweredAt *time.Time `json:"answered_at,omitempty"`
 	// Reason is why an expired request stopped waiting, when a record said.
-	Reason agent.CancelReason
+	Reason agent.CancelReason `json:"reason,omitempty"`
 }
 
 // Result is what a call came back with.
 type Result struct {
-	Text       string
-	Contents   []agent.ContentBlock
-	IsError    bool
-	Subtype    agent.ToolResultSubtype
-	DurationMs int64
-	ExitCode   *int
-	Subagent   *agent.SubagentReport
-	HTMLPage   string
-	WorkRef    *agent.WorkRef
-	ObservedAt *time.Time
-	Seq        session.HistorySeq
+	Text       string                  `json:"text,omitempty"`
+	Contents   []agent.ContentBlock    `json:"contents,omitempty"`
+	IsError    bool                    `json:"is_error,omitempty"`
+	Subtype    agent.ToolResultSubtype `json:"subtype,omitempty"`
+	DurationMs int64                   `json:"duration_ms,omitempty"`
+	ExitCode   *int                    `json:"exit_code,omitempty"`
+	Subagent   *agent.SubagentReport   `json:"subagent,omitempty"`
+	HTMLPage   string                  `json:"html_page,omitempty"`
+	WorkRef    *agent.WorkRef          `json:"work_ref,omitempty"`
+	ObservedAt *time.Time              `json:"observed_at,omitempty"`
+	Seq        session.HistorySeq      `json:"seq,omitempty"`
 }
 
 // Item is the tool run toolUseID names.
@@ -226,6 +226,7 @@ func (p *Projection) addItem(item Item) int {
 			delete(p.items.waiting, item.ToolUseID)
 		}
 	}
+	p.onItemAdded(i)
 	return i
 }
 
@@ -238,6 +239,7 @@ func (p *Projection) nest(item *Item, parentToolUseID string) {
 		return
 	}
 	item.ParentToolUseID = parentToolUseID
+	p.onNested(item)
 	if parent, ok := p.item(parentToolUseID); ok {
 		parent.Children = append(parent.Children, item.ToolUseID)
 	} else {
@@ -546,6 +548,8 @@ func (p *Projection) permissionExpired(requestID string, reason agent.CancelReas
 	permission := *prev
 	permission.Status, permission.Reason = PermissionExpired, reason
 	item.Permission = &permission
+	// A process going away expires every request without naming one.
+	p.t.mark(p.t.itemEntry[p.items.byRequest[requestID]])
 	if item.Status == ItemAwaitingPermission {
 		item.Status = ItemExpired
 	}
@@ -571,15 +575,17 @@ func (p *Projection) request(requestID string) (*Item, *Permission, bool) {
 // turn — and everything under it with it — but not its process.
 func (p *Projection) settleRunning(processGone bool) {
 	for i := range p.state.Items {
-		item := &p.state.Items[i]
-		if _, nested := p.item(item.ParentToolUseID); nested {
+		if _, nested := p.item(p.state.Items[i].ParentToolUseID); nested {
 			continue
 		}
-		p.settleTree(item, processGone)
+		p.settleTree(i, processGone)
 	}
 }
 
-func (p *Projection) settleTree(item *Item, processGone bool) {
+// settleTree settles State.Items[i] and everything under it. No record names
+// what it settles, so each item it moves is marked changed here.
+func (p *Projection) settleTree(i int, processGone bool) {
+	item := &p.state.Items[i]
 	switch item.Status {
 	case ItemBackground:
 		if !processGone {
@@ -587,17 +593,19 @@ func (p *Projection) settleTree(item *Item, processGone bool) {
 		}
 		item.Status, item.LostWithProcess = ItemInterrupted, true
 		p.settledIn[item.ToolUseID] = len(p.state.Turns)
+		p.t.mark(p.t.itemEntry[i])
 	case ItemRunning:
 		item.Status = ItemInterrupted
 		p.settledIn[item.ToolUseID] = len(p.state.Turns)
+		p.t.mark(p.t.itemEntry[i])
 	}
 	p.settleChildren(item, processGone)
 }
 
 func (p *Projection) settleChildren(item *Item, processGone bool) {
 	for _, id := range item.Children {
-		if child, ok := p.item(id); ok {
-			p.settleTree(child, processGone)
+		if i, ok := p.items.byToolUse[id]; ok {
+			p.settleTree(i, processGone)
 		}
 	}
 }

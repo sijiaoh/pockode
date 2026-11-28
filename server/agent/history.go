@@ -12,9 +12,11 @@ import (
 	"github.com/pockode/server/session"
 )
 
-// Wire is an event as it is serialized for a client: the params of a
-// `chat.<type>` notification. Every Wire is exactly one of two kinds, and the
-// kind is the type, not a flag on it:
+// Wire is an event as it is serialized: a line of history.jsonl, or a live
+// event as the process broadcasts it. Clients receive neither directly — they
+// get the projection's items and the chat watcher's deltas built from them
+// (docs/agent-chat.md#live-updates). Every Wire is exactly one of two kinds,
+// and the kind is the type, not a flag on it:
 //
 //   - a Record, which belongs in session history and is written there whole;
 //   - a LiveEvent, which reports the latest value of something still changing

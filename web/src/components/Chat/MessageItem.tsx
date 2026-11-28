@@ -1071,12 +1071,6 @@ export interface MessageItemProps {
 	 */
 	isFirst?: boolean;
 	/**
-	 * First loaded, with older pages still above: a reply here may be the back
-	 * half of one the page boundary cut, so its work figures count nothing it
-	 * cannot see the start of.
-	 */
-	olderPagesAbove?: boolean;
-	/**
 	 * This bubble is the one the open turn is writing into, which is what makes a
 	 * tail line on it true. Not the same as `isLast` since a message sent mid-reply
 	 * is appended below the reply it went into — that reply is still being written
@@ -1432,7 +1426,6 @@ const MessageItem = memo(function MessageItem({
 	sessionId,
 	onOpenFile,
 	isFirst,
-	olderPagesAbove,
 	isOpenTurn,
 	inOpenTurn,
 	isCodex,
@@ -1623,7 +1616,7 @@ const MessageItem = memo(function MessageItem({
 		message.status === "sending" || message.status === "streaming";
 	// Never on the reply being written: the tail line owns the running turn,
 	// and neither its figures nor its files are final until it ends.
-	const work = pending ? undefined : turnWork(message, !!olderPagesAbove);
+	const work = pending ? undefined : turnWork(message);
 
 	// Assistant message: no bubble, the full reading width. Not `overflow-hidden`
 	// like the bubble was: the action row reaches left of the column so its first

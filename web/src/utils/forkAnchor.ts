@@ -85,9 +85,9 @@ export function isForkableMessage(message: Message): boolean {
  * True for an assistant bubble the agent has not written into. Nothing the user
  * can see, so not something a fork can claim to leave behind.
  *
- * Deliberately wider than `messageReducer`'s own notion of a placeholder, which
- * only counts a settled one: a bubble the agent is still filling is invisible
- * to the user right now, which is what this count is about.
+ * Deliberately wider than the transcript's own notion of an empty bubble,
+ * which only drops a settled one: a bubble the agent is still filling is
+ * invisible to the user right now, which is what this count is about.
  */
 function isBlankBubble(message: Message): boolean {
 	return message.role === "assistant" && message.parts.length === 0;

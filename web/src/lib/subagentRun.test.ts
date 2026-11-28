@@ -153,27 +153,6 @@ describe("subagentPath", () => {
 		expect(subagentPath(messages, "t1")).toEqual(["t1"]);
 	});
 
-	it("goes on up from a flat call through the run it belongs to", () => {
-		const messages: Message[] = [
-			bubble(nested("t1", run({ id: "t2" }))),
-			{
-				id: "m-flat",
-				role: "assistant",
-				status: "complete",
-				createdAt: new Date(0),
-				parts: [
-					{
-						id: "p-t5",
-						type: "tool_call",
-						tool: nested("t5", run({ id: "t6" })),
-						parentToolUseId: "t2",
-					},
-				],
-			},
-		];
-		expect(subagentPath(messages, "t6")).toEqual(["t1", "t2", "t5", "t6"]);
-	});
-
 	it("is the one subagent when its call is not loaded", () => {
 		expect(subagentPath([], "t9")).toEqual(["t9"]);
 	});

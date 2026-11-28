@@ -12,7 +12,6 @@ import {
 	useEffect,
 	useImperativeHandle,
 	useLayoutEffect,
-	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -21,7 +20,6 @@ import {
 	resumedRun,
 	subagentLastWords,
 	subagentPath,
-	unfiledParts,
 	withoutEchoedReport,
 } from "../../lib/subagentRun";
 import {
@@ -30,7 +28,7 @@ import {
 	toolSummary,
 } from "../../lib/toolSummary";
 import { findLoadedRun } from "../../lib/transcriptMemo";
-import type { ContentPart, Message, ToolRun } from "../../types/message";
+import type { Message, ToolRun } from "../../types/message";
 import {
 	ClampedContent,
 	headerIconButtonClass,
@@ -56,11 +54,6 @@ import { PartBlocks } from "./ToolList";
 import { Chip, Detail } from "./ToolRow";
 import { findShown, useLanding } from "./transcriptJump";
 import { TranscriptViewContext } from "./transcriptViewContext";
-import {
-	UnfiledChildrenContext,
-	useUnfiledChildren,
-	useUnfiledChildrenValue,
-} from "./unfiledChildrenContext";
 import { useTranscriptScroll } from "./useTranscriptScroll";
 
 /** What the chat hands every part a level draws, as its own list does. */
@@ -143,9 +136,7 @@ export function SubagentTranscript({
 
 	// Derived from the whole transcript, as the chat's list derives them: a
 	// row in a level reads the same facts its copy in the chat does.
-	const unfiled = useUnfiledChildrenValue(messages);
 	const resumes = useSubagentResumesValue(messages);
-	const flat = useMemo(() => unfiledParts(messages), [messages]);
 
 	const messagesRef = useRef(messages);
 	messagesRef.current = messages;
@@ -201,30 +192,27 @@ export function SubagentTranscript({
 			// transcript area shows.
 			className="absolute inset-0 z-5 bg-th-bg-primary"
 		>
-			<UnfiledChildrenContext value={unfiled}>
-				<SubagentResumesContext value={resumes}>
-					{/* Levels are drawn as siblings, outermost first, never one
-					    inside another: each registers a layer, and a child's
-					    effect runs before its parent's, so nested levels opened in
-					    one commit would push their history entries in the wrong
-					    order (docs/subagent-transcript-ui.md#back-at-each-depth). */}
-					{shown.map((run, index) => (
-						<SubagentLevel
-							key={run.id}
-							index={index}
-							onTop={index === kept - 1}
-							handleRef={index === kept - 1 ? ref : undefined}
-							run={run}
-							titles={titles.slice(0, index + 1)}
-							flatChildren={flat.get(run.id)}
-							onGoUp={goUp}
-							onDescend={descend}
-							escapeHeld={escapeHeld}
-							partProps={partProps}
-						/>
-					))}
-				</SubagentResumesContext>
-			</UnfiledChildrenContext>
+			<SubagentResumesContext value={resumes}>
+				{/* Levels are drawn as siblings, outermost first, never one
+				    inside another: each registers a layer, and a child's
+				    effect runs before its parent's, so nested levels opened in
+				    one commit would push their history entries in the wrong
+				    order (docs/subagent-transcript-ui.md#back-at-each-depth). */}
+				{shown.map((run, index) => (
+					<SubagentLevel
+						key={run.id}
+						index={index}
+						onTop={index === kept - 1}
+						handleRef={index === kept - 1 ? ref : undefined}
+						run={run}
+						titles={titles.slice(0, index + 1)}
+						onGoUp={goUp}
+						onDescend={descend}
+						escapeHeld={escapeHeld}
+						partProps={partProps}
+					/>
+				))}
+			</SubagentResumesContext>
 		</section>
 	);
 }
@@ -239,7 +227,6 @@ interface LevelProps {
 	run: ToolRun;
 	/** Every level's title down to this one: its breadcrumb. */
 	titles: string[];
-	flatChildren?: ContentPart[];
 	/** Leaves this many levels up; 0 closes the layer. */
 	onGoUp: (depth: number) => void;
 	onDescend: (from: number, toolUseId: string, opener: HTMLElement) => void;
@@ -253,7 +240,6 @@ function SubagentLevel({
 	handleRef,
 	run,
 	titles,
-	flatChildren,
 	onGoUp,
 	onDescend,
 	escapeHeld,
@@ -289,9 +275,7 @@ function SubagentLevel({
 
 	const prompt = taskPrompt(run.input);
 	const { report, outcome } = subagentLastWords(run);
-	// Filed then flat is arrival order: while any child is flat, later work
-	// goes flat after it (docs/subagent-transcript-ui.md#unfiled-children).
-	const arrived = [...(run.children ?? []), ...(flatChildren ?? [])];
+	const arrived = run.children ?? [];
 	// Resumed, it is running again, as its row is.
 	const resume = useSubagentResume(run.id);
 	const live = isLiveRun(resumedRun(run, resume));
@@ -501,13 +485,9 @@ function LevelHeader({
 }) {
 	const resume = useSubagentResume(run.id);
 	const rowRun = resumedRun(run, resume);
-	const unfiled = useUnfiledChildren(run.id);
 	// The row's own header, so the two cannot say different things about one
 	// run: its glyph, chips and lines. No step window here (see Line 3).
-	const { summary, glyph, firstLine, secondLine } = subagentHeader(
-		rowRun,
-		unfiled,
-	);
+	const { summary, glyph, firstLine, secondLine } = subagentHeader(rowRun);
 	const line = secondLine.richSecondLine;
 	const plainLine = secondLine.secondLine;
 

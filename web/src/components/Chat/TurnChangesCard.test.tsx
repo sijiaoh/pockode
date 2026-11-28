@@ -76,16 +76,13 @@ function Card({
 }) {
 	const counted =
 		work ??
-		turnWork(
-			{
-				id: "m",
-				role: "assistant",
-				parts,
-				status: "complete",
-				createdAt: new Date(),
-			},
-			false,
-		);
+		turnWork({
+			id: "m",
+			role: "assistant",
+			parts,
+			status: "complete",
+			createdAt: new Date(),
+		});
 	return counted ? (
 		<TurnChangesCard
 			changes={turnChanges(parts, "/repo")}
@@ -345,7 +342,7 @@ describe("TurnChangesCard", () => {
 		);
 	});
 
-	it("leaves a reply the oldest page may have cut at its files", () => {
+	it("leaves a reply whose start is not loaded at its files", () => {
 		render(<Card parts={[edit("1", "/repo/a.ts", "a", "b")]} work={{}} />);
 		expect(card()).toHaveAccessibleName("1 file changed");
 		// Alone, the entry is never shortened to a fragment: no part of it is
@@ -449,12 +446,11 @@ describe("TurnChangesCard", () => {
 			).not.toBeInTheDocument();
 		});
 
-		it("shows no figures on the row for a reply the oldest page may have cut", () => {
+		it("shows no figures on the row for a reply whose start is not loaded", () => {
 			render(
 				<MessageItem
 					sessionId="s"
-					olderPagesAbove
-					message={{ ...reads(), endedAt: 5_000 }}
+					message={{ ...reads(), startNotLoaded: true, endedAt: 5_000 }}
 				/>,
 			);
 			expect(actionsRow()).toBeInTheDocument();
@@ -518,19 +514,22 @@ describe("TurnChangesCard", () => {
 			expect(row).toHaveAttribute("aria-expanded", "true");
 		});
 
-		it("counts only what it can see the start of at the top of loaded history", () => {
+		it("counts nothing on a reply whose start is not loaded", () => {
 			render(
 				<MessageItem
 					sessionId="s"
-					olderPagesAbove
-					message={{ ...message("complete"), endedAt: 5_000 }}
+					message={{
+						...message("complete"),
+						startNotLoaded: true,
+						endedAt: 5_000,
+					}}
 				/>,
 			);
 			expect(card()).toHaveAccessibleName("1 file changed");
 		});
 
-		// A subagent's steps left flat by the page boundary are the loaded
-		// half's work: its files are listed, with nothing counted.
+		// A subagent's steps left flat by a fork that cut off their call are the
+		// reply's work: its files are listed, with nothing counted.
 		it("lists the files of a reply whose only calls are flat steps", () => {
 			const step = (part: ContentPart) => ({
 				...part,
@@ -552,7 +551,6 @@ describe("TurnChangesCard", () => {
 			render(
 				<MessageItem
 					sessionId="s"
-					olderPagesAbove
 					message={{
 						...message("complete"),
 						openedAtReadPoint: true,

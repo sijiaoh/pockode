@@ -38,7 +38,9 @@ const HistoryWriteFailedCode = "history_write_failed"
 // Sink is what the Sequencer hands a session's records to, in seq order: the
 // chat subscribers' queues (watch.ChatMessagesWatcher). Enqueue is called with
 // the session's lock held, so it must not block — delivery to connections
-// happens behind it, never inside it.
+// happens behind it, never inside it. Reading what the record changed off the
+// session's projection is no delivery: at worst it loads the projection once
+// from the file, and it holds up only this session.
 //
 // seq is session.NoHistorySeq for a live event, and for the warning that
 // stands in for a record that could not be written. exclude, if not nil, is a

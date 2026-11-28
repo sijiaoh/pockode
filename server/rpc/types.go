@@ -40,6 +40,7 @@ import (
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/htmlpage"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -271,10 +272,15 @@ type QuestionAnswerParams struct {
 // a Stop throwing it away unread, which the sender has to find on the very
 // bubble it drew itself.
 type MessageResult struct {
-	Seq       session.HistorySeq       `json:"seq,omitempty"`
-	MessageID string                   `json:"message_id,omitempty"`
-	Content   string                   `json:"content,omitempty"`
-	Command   *agent.CommandInvocation `json:"command,omitempty"`
+	Seq       session.HistorySeq `json:"seq,omitempty"`
+	MessageID string             `json:"message_id,omitempty"`
+	// ItemID is the message's transcript item (projection.PageItem.ID): the
+	// sender is left out of the update that carries the item, and every later
+	// update naming it — the turn it opened, a Stop discarding it — names it
+	// by this. Omitted exactly when Seq is.
+	ItemID  int                      `json:"item_id,omitempty"`
+	Content string                   `json:"content,omitempty"`
+	Command *agent.CommandInvocation `json:"command,omitempty"`
 	// HTMLAction is the page action a chat.html_action message was written
 	// from, as its record holds it, with Content beside it.
 	HTMLAction *htmlpage.Action `json:"html_action,omitempty"`
@@ -1160,70 +1166,104 @@ type ChatMessagesSubscribeParams struct {
 	// ID is the subscription id; see SubscribeParams.
 	ID        string `json:"id"`
 	SessionID string `json:"session_id"`
-	// Limit caps how many of the newest history records come back. Zero asks for
-	// session.DefaultHistoryPageSize; anything above session.MaxHistoryPageSize is
+	// Limit is the page's budget, in history records: the newest items come
+	// back until the records that went into them reach it, and an item is
+	// never split (projection.Projection.Page). Zero asks for
+	// projection.DefaultPageSize; anything above projection.MaxPageSize is
 	// clamped to it.
 	Limit int `json:"limit,omitempty"`
 }
 
 type ChatMessagesSubscribeResult struct {
-	// History is the newest page of the session's history, oldest record first.
-	// Earlier pages are fetched with chat.messages.history.
-	History []json.RawMessage `json:"history"`
-	// HasMore reports whether records older than History[0] exist.
-	HasMore bool `json:"has_more"`
-	// NextBeforeSeq is the cursor for the page before this one; absent when
-	// HasMore is false. See ChatMessagesHistoryParams.BeforeSeq.
-	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
+	// Page is the newest page of the session's transcript — its turns and
+	// items, each complete as it stands now — with the cursor for the page
+	// before it and the session's current plan. Earlier pages are fetched
+	// with chat.messages.history. Its through_seq is the newest record the
+	// page holds: a notification for a record at or before it is already in
+	// the page.
+	projection.Page
 	// Turn is what the session is doing at the moment of subscribing. The
 	// transcript's own subscription reports it because the transcript is what it
 	// governs: a turn that is not running is what tells the client that every
 	// message still streaming has stopped, which is the only thing that closes
 	// out a transcript whose server died mid-stream (docs/lifecycle-ui.md §2.4).
 	Turn Turn `json:"turn"`
-	// ToolActivity is what each tool call still in flight last reported doing,
-	// by tool_use_id. It is here rather than in History because a tool_activity
-	// event is the latest value of something still changing and is never
-	// recorded (see agent.LiveEvent) — so a client that subscribes
-	// mid-run would otherwise have missed every one of them, which on a phone is
-	// the normal case. Absent when nothing is in flight.
-	ToolActivity map[string]string `json:"tool_activity,omitempty"`
-	// ToolProgress is how far each subagent still in flight last reported
-	// having come, by its call's tool_use_id, for the same reason ToolActivity
-	// is here (see agent.ToolActivityEvent.Subagent). Absent when none did.
-	ToolProgress map[string]agent.SubagentProgress `json:"tool_progress,omitempty"`
+	// Streams is what is still being generated as of the subscription: text
+	// that will become an item once it is over, and what calls still in
+	// flight have said about themselves. Live state, never recorded
+	// (agent.LiveEvent), so a client that subscribes mid-run — on a phone the
+	// normal case — would otherwise have missed it. The subscription's
+	// chat.delta notifications continue exactly from here: none of what is in
+	// Streams is sent again, and nothing sent after is in it.
+	Streams ChatStreams `json:"streams"`
 	// ServerTime is the server's clock as the reply was built, so a client can
-	// count a call still running in History from its observed_at (see
+	// count a call still running in the page from its started_at (see
 	// agent.ObserveAt) without trusting its own clock to agree
 	// with the server's: elapsed is ServerTime minus observed_at, plus however
 	// long ago the client received this reply. The same rule as Turn's reading.
 	ServerTime time.Time `json:"server_time"`
 }
 
-// ChatMessagesHistoryParams asks for the page of history older than one the
-// client already holds. It needs no subscription: an older page is settled
-// history, so it can never change and can never collide with what the
-// subscription streams, which is always newer than the page subscribing returned.
+// ChatStreams is a session's live streams (watch.ChatMessagesWatcher): what
+// chat.delta notifications have said since each stream began.
+type ChatStreams struct {
+	// Thinking is the main agent's thinking while it is under way, before the
+	// thinking item that records it; nil when it is not thinking. Never a
+	// subagent's, whose run is where its work is described.
+	Thinking *ThinkingStream `json:"thinking,omitempty"`
+	// Tools are the calls still in flight that have said something about
+	// themselves, by tool_use_id: the tool item each extends.
+	Tools map[string]ToolStream `json:"tools,omitempty"`
+}
+
+// ThinkingStream is thinking so far; see agent.ThinkingDeltaEvent. Both empty
+// is the agent thinking with no text to show (Claude, or Codex before its
+// first words).
+type ThinkingStream struct {
+	Content       string `json:"content,omitempty"`
+	FullReasoning string `json:"full_reasoning,omitempty"`
+}
+
+// ToolStream is what a call in flight has said so far; see
+// agent.ToolActivityEvent.
+type ToolStream struct {
+	// Activity is the call's newest one-line account of what it is doing.
+	Activity string `json:"activity,omitempty"`
+	// Output is what it has printed so far, for the engines that stream it.
+	Output string `json:"output,omitempty"`
+	// OutputTruncated says Output is only the tail of what it printed: a
+	// stream is kept up to a bound, and the whole output arrives with the
+	// call's result.
+	OutputTruncated bool `json:"output_truncated,omitempty"`
+	// SubagentProgress is how far the subagent the call runs has come.
+	SubagentProgress *agent.SubagentProgress `json:"subagent_progress,omitempty"`
+}
+
+// ChatMessagesHistoryParams asks for the page of the transcript older than one
+// the client already holds. It needs no subscription. Its items are complete
+// as they stand when it is cut, which for an item still changing — a
+// backgrounded call, a question still open — is newer than what the client was
+// told when it subscribed: the subscription's notifications say what changed
+// after that.
 type ChatMessagesHistoryParams struct {
 	SessionID string `json:"session_id"`
-	// BeforeSeq is exclusive: the reply holds the records immediately older than
-	// the record it names. It must be a cursor the server handed out
-	// (next_before_seq) — a client cannot derive one, because a record the server
-	// could not stamp carries no seq at all. Zero asks for the newest page.
+	// BeforeSeq is exclusive: the reply holds the items immediately older than
+	// the item it names. It must be a cursor the server handed out
+	// (next_before_seq) — a client cannot derive one, because an item's place
+	// is its first record's, and one in no file carries no seq at all. Zero
+	// asks for the newest page.
 	BeforeSeq session.HistorySeq `json:"before_seq,omitempty"`
 	// Limit follows ChatMessagesSubscribeParams.Limit.
 	Limit int `json:"limit,omitempty"`
 }
 
 type ChatMessagesHistoryResult struct {
-	// History is the page, oldest record first. Empty when BeforeSeq already
-	// named the first record of the session.
-	History       []json.RawMessage  `json:"history"`
-	HasMore       bool               `json:"has_more"`
-	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
+	// Page is the page, oldest item first. Its turns are empty when BeforeSeq
+	// already named the first item of the session.
+	projection.Page
 	// ServerTime follows ChatMessagesSubscribeResult.ServerTime: a call can
-	// still be running when its tool_call has fallen onto an older page — a
-	// long subagent run pushes it there.
+	// still be running when its item has fallen onto an older page — a long
+	// subagent run pushes it there.
 	ServerTime time.Time `json:"server_time"`
 }
 
@@ -2185,9 +2225,7 @@ type SessionViewHistoryParams struct {
 }
 
 type SessionViewHistoryResult struct {
-	History       []json.RawMessage  `json:"history"`
-	HasMore       bool               `json:"has_more"`
-	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
+	projection.Page
 	// ServerTime follows ChatMessagesSubscribeResult.ServerTime: the viewed
 	// session may be running in its own worktree.
 	ServerTime time.Time `json:"server_time"`

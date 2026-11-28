@@ -85,7 +85,7 @@ These watchers implement store listener interfaces and use async buffered channe
 |---------|------|--------------------|--------------|
 | SessionListWatcher | `watch/session_list.go` | `session.OnChangeListener`, plus work changes routed by the worktree manager | `session.list.changed` |
 | SessionDetailWatcher | `watch/session_detail.go` | `session.OnChangeListener`, plus work changes routed by the worktree manager | `session.detail.changed` |
-| ChatMessagesWatcher | `watch/chat_messages.go` | `chatstream.Sink` | `chat.<event-type>`, `chat.resync` ([per-subscriber delivery](code/subscription-system.md#chat-delivery)) |
+| ChatMessagesWatcher | `watch/chat_messages.go` | `chatstream.Sink` | `chat.update`, `chat.delta`, `chat.resync` ([live updates](agent-chat.md#live-updates), [per-subscriber delivery](code/subscription-system.md#chat-delivery)) |
 | WorkListWatcher | `watch/work_list.go` | `work.OnChangeListener` + every worktree's `session.OnChangeListener` | `work.list.changed` |
 | WorkDetailWatcher | `watch/work_detail.go` | `work.OnChangeListener` + `work.OnCommentChangeListener` + every worktree's `session.OnChangeListener` | `work.detail.changed` |
 | SettingsWatcher | `watch/settings.go` | `settings.OnChangeListener` | `settings.changed` |

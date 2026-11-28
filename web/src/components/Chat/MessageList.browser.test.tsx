@@ -1,9 +1,19 @@
 import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
+	msg,
+	page,
+	resetItems,
+	text,
+	tool,
+	turn,
+	update,
+} from "../../test/chatItemsFixture";
+import {
 	type RenderedTranscript,
 	renderTranscript,
 } from "../../test/transcriptFixture";
+import type { ChatPage, PageTurn } from "../../types/chatItems";
 import type { Message } from "../../types/message";
 import MessageList from "./MessageList";
 
@@ -16,29 +26,22 @@ vi.mock("../../lib/wsStore", async (importOriginal) =>
 const FILLER =
 	"The quick brown fox jumps over the lazy dog, and then it does it again, slowly, so that this paragraph wraps onto several lines at any width.";
 
-const say = (content: string) => ({ type: "message", content });
 /** A paragraph led by `marker`, which is what a test finds it by. */
-const write = (marker: string) => ({
-	type: "text",
-	content: `${marker}\n\n${FILLER}\n\n${FILLER}`,
-});
-const run = (id: string) => [
-	{
-		type: "tool_call",
-		tool_use_id: id,
-		tool_name: "Bash",
-		tool_input: { command: `echo ${id}` },
-	},
-	{ type: "tool_result", tool_use_id: id, tool_result: id },
-];
-const done = { type: "done" };
+const write = (marker: string) => text(`${marker}\n\n${FILLER}\n\n${FILLER}`);
+const run = (id: string) =>
+	tool(
+		"Bash",
+		{ command: `echo ${id}` },
+		{
+			tool_use_id: id,
+			result: { text: id },
+		},
+	);
 
-function turns(from: number, count: number): unknown[] {
-	return Array.from({ length: count }, (_, i) => [
-		say(`Question ${from + i}`),
-		write(`Answer ${from + i}.`),
-		done,
-	]).flat();
+function turns(from: number, count: number): PageTurn[] {
+	return Array.from({ length: count }, (_, i) =>
+		turn({}, msg(`Question ${from + i}`), write(`Answer ${from + i}.`)),
+	);
 }
 
 /**
@@ -53,27 +56,43 @@ const READER_LINE = "Reading here.";
  * scrolling up to reach it.
  *
  * `cutInsideTurn` decides where the page above ends. Inside that bubble's turn,
- * the page's last records are the turn's first half, so `prependHistoryPage`
- * splices them into the bubble on screen. Otherwise the page above holds a turn
- * of its own, ended, and the newest page opens on a message of its own above
- * the same bubble — one row more, and nothing to splice.
+ * the page's last items are the turn's first half, and they go into the
+ * bubble on screen. Otherwise the page above holds a turn of its own, ended,
+ * and the newest page opens on a message of its own above the same bubble —
+ * one row more.
  */
-function session(cutInsideTurn: boolean): unknown[][] {
-	const oldest = turns(1, 3);
-	const firstHalf = [
-		say("Start the work"),
-		write("Earlier half."),
-		...run("t1"),
-	];
-	const secondHalf = [...run("t2"), ...run("t3"), write(READER_LINE), done];
-	const below = turns(10, 6);
-	return cutInsideTurn
-		? [oldest, firstHalf, [...secondHalf, ...below]]
-		: [
-				oldest,
-				[...firstHalf, done],
-				[say("Carry on"), ...secondHalf, ...below],
-			];
+function session(cutInsideTurn: boolean): ChatPage[] {
+	resetItems();
+	const oldest = page(turns(1, 3));
+	if (cutInsideTurn) {
+		const firstHalf = [
+			msg("Start the work"),
+			write("Earlier half."),
+			run("t1"),
+		];
+		const secondHalf = [run("t2"), run("t3"), write(READER_LINE)];
+		const whole = turn({}, ...firstHalf, ...secondHalf);
+		const below = turns(10, 6);
+		return [
+			oldest,
+			page([{ ...whole, items: firstHalf }]),
+			page([{ ...whole, items: secondHalf, continued: true }, ...below]),
+		];
+	}
+	const above = page([
+		turn({}, msg("Start the work"), write("Earlier half."), run("t1")),
+	]);
+	const newest = page([
+		turn({}, msg("Carry on"), run("t2"), run("t3"), write(READER_LINE)),
+		...turns(10, 6),
+	]);
+	return [oldest, above, newest];
+}
+
+/** Output arriving at the end of the newest page's last turn. */
+function output(pages: ChatPage[], marker: string) {
+	const last = pages.at(-1)?.turns.at(-1)?.turn?.turn_id;
+	return update({ items: [write(marker)], turnId: last });
 }
 
 /**
@@ -128,8 +147,8 @@ describe("MessageList paging in a real layout", () => {
 	});
 
 	// The test below passes just as well on a page that lands as a bubble of its
-	// own; this keeps it covering the splice.
-	it("splices a page cut inside a turn into the bubble at the top", async () => {
+	// own; this keeps it covering a page that goes into the bubble on screen.
+	it("puts a page cut inside a turn into the bubble at the top", async () => {
 		const transcript = await renderTranscript({ pages: session(true) });
 		await readToTop(transcript);
 
@@ -141,7 +160,7 @@ describe("MessageList paging in a real layout", () => {
 		expect(bubble).toContainElement(screen.getByText(READER_LINE));
 	});
 
-	it("holds the reader's content still when a page is spliced into the bubble at the top", async () => {
+	it("holds the reader's content still when a page goes into the bubble at the top", async () => {
 		const transcript = await renderTranscript({ pages: session(true) });
 		await readToTop(transcript);
 		const top = transcript.scroller.scrollTop;
@@ -158,14 +177,15 @@ describe("MessageList paging in a real layout", () => {
 	// together. Measured by the content's total height, the output would count
 	// as history added above the reader and push them down by its height.
 	it("holds the reader's content still when output lands at the end in the same commit as a page", async () => {
-		const transcript = await renderTranscript({ pages: session(true) });
+		const pages = session(true);
+		const transcript = await renderTranscript({ pages });
 		await readToTop(transcript);
 		const before = transcript.viewTopOf(READER_LINE);
 
 		// Not a message: one the reader typed would take them to the tail.
 		await transcript.landPage([
-			write("Live output."),
-			write("More live output."),
+			output(pages, "Live output."),
+			output(pages, "More live output."),
 		]);
 
 		expect(screen.getByText("More live output.")).toBeInTheDocument();
@@ -204,8 +224,9 @@ describe("MessageList paging ahead in a real layout", () => {
 	});
 
 	it("waits for a page that took the top more than a screen up until the reader reads on", async () => {
+		resetItems();
 		const transcript = await renderTranscript({
-			pages: [turns(1, 3), turns(30, 10), turns(20, 6)],
+			pages: [page(turns(1, 3)), page(turns(30, 10)), page(turns(20, 6))],
 		});
 		const { scroller } = transcript;
 		await readToTop(transcript);
@@ -227,8 +248,9 @@ describe("MessageList mid-flick in a real layout", () => {
 	// stopped the flick dead. The page has nowhere to go but up, past the top of
 	// the track, until the view is at rest.
 	it("holds the reader still without a write when a page taller than the reserve lands", async () => {
+		resetItems();
 		const transcript = await renderTranscript({
-			pages: [turns(1, 10), turns(20, 6)],
+			pages: [page(turns(1, 10)), page(turns(20, 6))],
 		});
 		await readToTop(transcript);
 		const line = "Answer 20.";
@@ -322,27 +344,31 @@ describe("MessageList holding the reader inside one long part", () => {
 	 * One answer several screens long — an image near its top, the reader's
 	 * line well below it — above enough turns to scroll.
 	 */
-	const longAnswer = [
-		...turns(1, 1),
-		say("Explain it at length"),
-		{
-			type: "text",
-			content: [
-				"Here is the picture.",
-				`![diagram](${IMAGE})`,
-				...Array(6).fill(FILLER),
-				READER_LINE,
-				...Array(6).fill(FILLER),
-			].join("\n\n"),
-		},
-		done,
-		...turns(10, 3),
-	];
+	function longAnswer(): ChatPage {
+		resetItems();
+		return page([
+			...turns(1, 1),
+			turn(
+				{},
+				msg("Explain it at length"),
+				text(
+					[
+						"Here is the picture.",
+						`![diagram](${IMAGE})`,
+						...Array(6).fill(FILLER),
+						READER_LINE,
+						...Array(6).fill(FILLER),
+					].join("\n\n"),
+				),
+			),
+			...turns(10, 3),
+		]);
+	}
 
 	// What settles is the frame a diagram or an image is drawn in: it reaches
 	// the list through the resize observer and through no commit at all.
 	it("holds the reader still when something above them in the same part settles", async () => {
-		const transcript = await renderTranscript({ pages: [longAnswer] });
+		const transcript = await renderTranscript({ pages: [longAnswer()] });
 		await transcript.scrollTo(
 			transcript.scroller.scrollTop + transcript.viewTopOf(READER_LINE) - 100,
 		);

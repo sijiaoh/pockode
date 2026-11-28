@@ -12,7 +12,6 @@ import {
 	resumedRun,
 	type SubagentLine,
 	subagentLine,
-	type UnfiledChildren,
 } from "../../lib/subagentRun";
 import { toolRunLook, toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
 import {
@@ -53,7 +52,6 @@ import {
 } from "./ToolRow";
 import { useRevealRequest } from "./toolJumpContext";
 import { useTranscriptView } from "./transcriptViewContext";
-import { useUnfiledChildren } from "./unfiledChildrenContext";
 
 interface Props {
 	run: ToolRun;
@@ -168,11 +166,7 @@ function SubagentLineContent({ line }: { line: SubagentLine }) {
  * subagent's on its resume (`resumedRun`); `stepWindow` is the row's step
  * window, when it draws one.
  */
-export function subagentHeader(
-	rowRun: ToolRun,
-	unfiled?: UnfiledChildren,
-	stepWindow?: ReactNode,
-) {
+export function subagentHeader(rowRun: ToolRun, stepWindow?: ReactNode) {
 	// No work directory: a subagent call is summarised from its description, and
 	// there is no path in it for one to shorten.
 	const summary = toolSummary(rowRun.name, rowRun.input, "");
@@ -180,9 +174,7 @@ export function subagentHeader(
 	// A denied call never started a subagent, so its own line has nothing to
 	// count; the shared one says who denied it.
 	const line =
-		look === "denied"
-			? null
-			: subagentLine(rowRun, unfiled, stepWindow !== undefined);
+		look === "denied" ? null : subagentLine(rowRun, stepWindow !== undefined);
 	const failed = look === "error";
 	return {
 		summary,
@@ -239,8 +231,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const openTranscript = useOpenSubagentTranscript();
 
 	const children = run.children ?? [];
-	const unfiled = useUnfiledChildren(run.id);
-	const steps = countSteps(children) + (unfiled?.steps ?? 0);
+	const steps = countSteps(children);
 	// The row says what the subagent is doing now, which a resumed one is
 	// doing under the call that resumed it; the body keeps what it reported.
 	const resume = useSubagentResume(run.id);
@@ -256,10 +247,9 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const windowSteps =
 		processOpen || !(live || fold.kept)
 			? []
-			: recentSteps([...children, ...(unfiled?.parts ?? [])], fold.lines);
+			: recentSteps(children, fold.lines);
 	const header = subagentHeader(
 		rowRun,
-		unfiled,
 		windowSteps.length > 0 ? (
 			<SubagentStepWindow steps={windowSteps} frozen={!live} />
 		) : undefined,
@@ -279,7 +269,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	// measured on claude 2.1.286) — is drawn in full above the Process, and
 	// not again at its end.
 	const shownChildren = processChildren(run).map((part) => ({ part }));
-	const showProcess = hasProcess(run, unfiled);
+	const showProcess = hasProcess(run);
 	// Cards from every depth, so a subagent's subagent asking is not hidden
 	// under a row that is itself inside a closed Process. Only the outermost
 	// row collects them: it is the one the user can always see. The innermost
@@ -384,13 +374,6 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 											items={shownChildren}
 											renderPart={({ part }) => renderChild(part)}
 										/>
-										{unfiled && unfiled.count > 0 && (
-											<p className="text-th-text-muted">
-												{unfiled.count === 1
-													? "1 more from this subagent is further down, where it first loaded."
-													: `${unfiled.count} more from this subagent are further down, where they first loaded.`}
-											</p>
-										)}
 									</div>
 								</div>
 							</CollapsibleBody>

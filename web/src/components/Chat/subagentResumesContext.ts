@@ -7,9 +7,10 @@ const EMPTY: ReadonlyMap<string, ToolRun> = new Map();
 
 /**
  * The transcript's resumed subagents, by their call, each with the call that
- * resumed it (`liveResumes`). A context for the reason `UnfiledChildrenContext`
- * is one: the answer is the whole transcript's — the resuming call is usually
- * in a later bubble than the row — and the reader is a row inside one.
+ * resumed it (`liveResumes`). A context rather than a prop because the answer
+ * is the whole transcript's — the resuming call is usually in a later bubble
+ * than the row — and the reader is a row inside one memoized bubble:
+ * threading it through would re-render every bubble whenever any page loads.
  * Selectable, because the resuming call changes on every record the resumed
  * subagent writes, and a plain context changing walks every bubble of the
  * transcript for its readers.

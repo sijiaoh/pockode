@@ -315,16 +315,9 @@ export function isLiveRun(run: ToolRun): boolean {
  * its children wherever it has any, which is the count its Process heading
  * shows; the CLI's own count only on a run with none — live from its progress,
  * settled from its result.
- *
- * `unfiled` are the run's children that sit flat, out of its children
- * (docs/tool-call-ui.md#what-is-not-filed). They count, because a count that
- * shrank across a page boundary would understate the work.
  */
-export function subagentToolUses(
-	run: ToolRun,
-	unfiled?: UnfiledChildren,
-): number {
-	const children = countSteps(run.children ?? []) + (unfiled?.steps ?? 0);
+export function subagentToolUses(run: ToolRun): number {
+	const children = countSteps(run.children ?? []);
 	if (children > 0) return children;
 	const reported = isLiveRun(run)
 		? run.subagentProgress?.toolUses
@@ -338,11 +331,8 @@ export function subagentToolUses(
  * the agents chip (docs/turn-progress-ui.md#43-the-agents), so the two
  * cannot word it differently. Nothing when neither has anything to say.
  */
-export function subagentNow(
-	run: ToolRun,
-	unfiled?: UnfiledChildren,
-): LatestChild | undefined {
-	const latest = unfiled?.latest ?? latestChild(run.children ?? []);
+export function subagentNow(run: ToolRun): LatestChild | undefined {
+	const latest = latestChild(run.children ?? []);
 	if (latest) return latest;
 	const lastTool = run.subagentProgress?.lastToolName;
 	return lastTool
@@ -350,14 +340,9 @@ export function subagentNow(
 		: undefined;
 }
 
-/**
- * The run's line, by its status (docs/tool-call-ui.md#status-by-status). The
- * newest unfiled child is the newest child of all, so it is what the subagent
- * is doing now.
- */
+/** The run's line, by its status (docs/tool-call-ui.md#status-by-status). */
 export function subagentLine(
 	run: ToolRun,
-	unfiled?: UnfiledChildren,
 	/**
 	 * Whether the row draws its step window under this line. The window names
 	 * the calls, so the line then names none: its tail is only words the
@@ -366,13 +351,10 @@ export function subagentLine(
 	 */
 	window = false,
 ): SubagentLine | null {
-	const toolUses = subagentToolUses(run, unfiled);
-	const latest = unfiled?.latest ?? latestChild(run.children ?? []);
+	const toolUses = subagentToolUses(run);
+	const latest = latestChild(run.children ?? []);
 	const words = (): LatestChild | undefined => {
-		const text = textAfterSteps([
-			...(run.children ?? []),
-			...(unfiled?.parts ?? []),
-		]);
+		const text = textAfterSteps(run.children ?? []);
 		return text ? { kind: "text", text } : undefined;
 	};
 
@@ -383,7 +365,7 @@ export function subagentLine(
 		// Its activity only after what it is doing now, being
 		// `Running <description>` — the row's detail said again.
 		const tail: LatestChild | undefined =
-			subagentNow(run, unfiled) ??
+			subagentNow(run) ??
 			(run.activity ? { kind: "text", text: run.activity } : undefined);
 		if (toolUses === 0 && !run.subagentProgress?.lastToolName) return null;
 		return { toolUses, tail, live: true };
@@ -521,111 +503,25 @@ export function processChildren(run: ToolRun): ContentPart[] {
  * (docs/subagent-transcript-ui.md#the-way-in). One with none is gone to by its
  * row instead.
  */
-export function hasProcess(run: ToolRun, unfiled?: UnfiledChildren): boolean {
-	return processChildren(run).length > 0 || (unfiled?.count ?? 0) > 0;
+export function hasProcess(run: ToolRun): boolean {
+	return processChildren(run).length > 0;
 }
-
-/** A run's children that sit flat rather than under the call they belong to. */
-export interface UnfiledChildren {
-	/** The parts themselves, in arrival order: newer than any filed child. */
-	parts: ContentPart[];
-	/** How many parts: text and calls alike. */
-	count: number;
-	/** How many of them are calls, by the same rule as `countSteps`. */
-	steps: number;
-	/** The newest of them that has something to say. */
-	latest?: LatestChild;
-}
-
-const NO_UNFILED: ReadonlyMap<string, UnfiledChildren> = new Map();
-
-/**
- * The unfiled children themselves, by the run's `tool_use_id`, in arrival
- * order — for a reader that draws them rather than counting them: a
- * subagent's transcript, which shows its work whole
- * (docs/subagent-transcript-ui.md#unfiled-children).
- */
-export const unfiledParts = perTranscript(
-	(messages: Message[]): ReadonlyMap<string, ContentPart[]> => {
-		const byParent = new Map<string, ContentPart[]>();
-		for (const message of messages) {
-			if (message.role !== "assistant") continue;
-			for (const part of message.parts) {
-				const parent =
-					"parentToolUseId" in part ? part.parentToolUseId : undefined;
-				if (!parent) continue;
-				const parts = byParent.get(parent) ?? [];
-				parts.push(part);
-				byParent.set(parent, parts);
-			}
-		}
-		return byParent;
-	},
-);
 
 /**
  * The subagents from the chat down to this one, by `tool_use_id`, outermost
  * first — the levels its transcript opens with, so that going up always goes
  * to the subagent it ran under
- * (docs/subagent-transcript-ui.md#back-at-each-depth). A chain whose outermost
- * call sits flat goes on up through the run that call belongs to; it stops at
- * a run whose call is not loaded.
+ * (docs/subagent-transcript-ui.md#back-at-each-depth). Just the one asked for
+ * when its call is not loaded.
  */
 export function subagentPath(messages: Message[], toolUseId: string): string[] {
-	let path: string[] = [];
-	let target: string | undefined = toolUseId;
-	while (target !== undefined && !path.includes(target)) {
-		const found = locateRun(messages, target);
-		if (!found) break;
-		path = [...found.chain.map((run) => run.id), ...path];
-		target = found.parent;
-	}
-	return path.length > 0 ? path : [toolUseId];
-}
-
-function locateRun(
-	messages: Message[],
-	toolUseId: string,
-): { chain: ToolRun[]; parent?: string } | undefined {
 	for (const message of messages) {
 		if (message.role !== "assistant") continue;
 		const chain = findToolRunChain(message.parts, toolUseId);
-		if (!chain) continue;
-		const outermost = message.parts.find(
-			(part) => part.type === "tool_call" && part.tool === chain[0],
-		);
-		const parent =
-			outermost?.type === "tool_call" ? outermost.parentToolUseId : undefined;
-		return { chain, parent };
+		if (chain) return chain.map((run) => run.id);
 	}
-	return undefined;
+	return [toolUseId];
 }
-
-/**
- * Every run's unfiled children, by the run's `tool_use_id`.
- *
- * They are only ever at the top of a bubble: a child goes flat when its call
- * is not loaded, or when earlier siblings already went flat, and either way
- * it lands where the stream is. A fetch never takes a row back from under the
- * reader, so they stay where they first loaded, and this is how the call's
- * row still knows about them.
- */
-export const unfiledChildren = perTranscript(
-	(messages: Message[]): ReadonlyMap<string, UnfiledChildren> => {
-		const byParent = unfiledParts(messages);
-		if (byParent.size === 0) return NO_UNFILED;
-		const result = new Map<string, UnfiledChildren>();
-		for (const [parent, parts] of byParent) {
-			result.set(parent, {
-				parts,
-				count: parts.length,
-				steps: countSteps(parts),
-				latest: latestChild(parts),
-			});
-		}
-		return result;
-	},
-);
 
 // Where: the tool a Claude agent resumes a subagent with, naming it by the id
 // the subagent's call reported (measured on claude 2.1.286 and 2.1.330: its

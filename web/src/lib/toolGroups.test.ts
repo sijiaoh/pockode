@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { PageItem, ToolItem, ToolItemStatus } from "../types/chatItems";
 import type {
 	ContentPart,
 	PermissionStatus,
@@ -6,7 +7,7 @@ import type {
 	ToolRun,
 	ToolRunStatus,
 } from "../types/message";
-import { replayHistory } from "./messageReducer";
+import { createChatItems, installNewestPage } from "./chatItems";
 import {
 	type FormSegment,
 	type GroupSummary,
@@ -14,6 +15,7 @@ import {
 	rowEntries,
 	summaryForms,
 } from "./toolGroups";
+import { buildTranscript, createTranscriptCache } from "./transcript";
 
 type Item = { part: ContentPart };
 
@@ -795,135 +797,151 @@ describe("rowEntries", () => {
 		});
 	});
 
-	// Driven through the reducer, since what dissolved a group was a call
+	// Driven through the transcript, since what dissolved a group was a call
 	// changing kind under it: a row turning into a card, a failure.
-	describe("as the reducer streams a turn in", () => {
-		const toolCall = (id: string, name: string) => ({
-			type: "tool_call",
-			tool_use_id: id,
-			tool_name: name,
-			tool_input: name === "Read" ? { file_path: `/${id}` } : { command: id },
-		});
-		const result = (id: string, isError = false) => ({
-			type: "tool_result",
-			tool_use_id: id,
-			tool_result: "ok",
-			is_error: isError,
-		});
-		const permission = (id: string) => ({
-			type: "permission_request",
-			request_id: `req-${id}`,
-			tool_use_id: id,
-			tool_name: "Bash",
-			tool_input: { command: id },
-		});
-		const allow = (id: string) => ({
-			type: "permission_response",
-			request_id: `req-${id}`,
-			choice: "allow",
+	describe("as a turn's calls change under it", () => {
+		const ids = new Map<string, number>();
+		beforeEach(() => ids.clear());
+		/** Call `id` as the server states it at one moment. */
+		const run = (
+			id: string,
+			name: string,
+			status: ToolItemStatus,
+			extra: Partial<ToolItem> = {},
+		): PageItem => {
+			const n = ids.get(id) ?? ids.size + 2;
+			ids.set(id, n);
+			return {
+				id: n,
+				kind: "tool",
+				seq: n,
+				last_seq: n,
+				tool: {
+					tool_use_id: id,
+					tool_name: name,
+					tool_input:
+						name === "Read" ? { file_path: `/${id}` } : { command: id },
+					status,
+					...extra,
+				},
+			};
+		};
+		const read = (id: string) => run(id, "Read", "succeeded");
+		const asked = (id: string, status: "pending" | "allowed" | "denied") => ({
+			permission: { request_id: `req-${id}`, status },
 		});
 
-		/** The shape after each record in turn, as the reader saw it then. */
-		function shapes(...records: object[]): string[][] {
-			return records.map((_, end) => {
-				const messages = replayHistory([
-					{ type: "message", content: "Go" },
-					...records.slice(0, end + 1),
-				]);
-				const last = messages.at(-1);
-				const parts = last?.role === "assistant" ? last.parts : [];
-				return shape(rowEntries(parts.map((part) => ({ part }))));
+		/** The shape of the turn's rows with its calls standing as `calls`. */
+		function shapeOf(...calls: PageItem[]): string[] {
+			const store = createChatItems();
+			installNewestPage(
+				store,
+				{
+					has_more: false,
+					turns: [
+						{
+							turn: {
+								turn_id: "t",
+								origin: "prompt",
+								message_id: "m",
+								ended: false,
+							},
+							items: [
+								{
+									id: 1,
+									kind: "message",
+									seq: 1,
+									message: { message_id: "m", content: "Go" },
+								},
+								...calls,
+							],
+						},
+					],
+				},
+				undefined,
+				undefined,
+			);
+			const messages = buildTranscript(store, createTranscriptCache(), {
+				live: true,
 			});
+			const last = messages.at(-1);
+			const parts = last?.role === "assistant" ? last.parts : [];
+			return shape(rowEntries(parts.map((part) => ({ part }))));
 		}
 
 		it("never groups a running row that a permission card replaces", () => {
-			expect(
-				shapes(
-					toolCall("r", "Read"),
-					result("r"),
-					toolCall("b", "Bash"),
-					permission("b"),
-				).slice(2),
-			).toEqual([
-				["r", "b"],
-				["r", "card:b"],
+			expect(shapeOf(read("r"), run("b", "Bash", "running"))).toEqual([
+				"r",
+				"b",
 			]);
+			expect(
+				shapeOf(
+					read("r"),
+					run("b", "Bash", "awaiting_permission", asked("b", "pending")),
+				),
+			).toEqual(["r", "card:b"]);
 		});
 
 		it("pins a failure inside a group without dissolving it", () => {
 			expect(
-				shapes(
-					toolCall("r1", "Read"),
-					result("r1"),
-					toolCall("r2", "Read"),
-					result("r2"),
-					toolCall("b", "Bash"),
-					result("b", true),
-				).slice(4),
-			).toEqual([
-				["[⟳ Running 1 command · Read 2 files]", "r1↓", "r2↓", "b↓"],
-				["[Read 2 files]", "r1↓", "r2↓", "b"],
-			]);
+				shapeOf(read("r1"), read("r2"), run("b", "Bash", "running")),
+			).toEqual(["[⟳ Running 1 command · Read 2 files]", "r1↓", "r2↓", "b↓"]);
+			expect(
+				shapeOf(read("r1"), read("r2"), run("b", "Bash", "failed")),
+			).toEqual(["[Read 2 files]", "r1↓", "r2↓", "b"]);
 		});
 
-		// Claude's order: the call, its card in the row's place, and after the
-		// approval nothing but the activity that brings the row back.
+		// The answer hands the card's place to the running row.
 		it("keeps an approved call in sight while it runs, and folds it once it settles", () => {
 			expect(
-				shapes(
-					toolCall("r1", "Read"),
-					result("r1"),
-					toolCall("r2", "Read"),
-					result("r2"),
-					toolCall("b", "Bash"),
-					permission("b"),
-					allow("b"),
-					{ type: "tool_activity", tool_use_id: "b", activity: "Running" },
-					result("b"),
-				).slice(6),
-			).toEqual([
-				// The answer hands the card's place to the running row.
-				["[Read 2 files]", "r1↓", "r2↓", "b"],
-				["[Read 2 files]", "r1↓", "r2↓", "b"],
-				["[Ran 1 command · Read 2 files]", "r1↓", "r2↓", "b↓"],
-			]);
+				shapeOf(
+					read("r1"),
+					read("r2"),
+					run("b", "Bash", "running", asked("b", "allowed")),
+				),
+			).toEqual(["[Read 2 files]", "r1↓", "r2↓", "b"]);
+			expect(
+				shapeOf(
+					read("r1"),
+					read("r2"),
+					run("b", "Bash", "succeeded", asked("b", "allowed")),
+				),
+			).toEqual(["[Ran 1 command · Read 2 files]", "r1↓", "r2↓", "b↓"]);
 		});
 
 		it("keeps a denied call in sight for good", () => {
 			expect(
-				shapes(
-					toolCall("r1", "Read"),
-					result("r1"),
-					toolCall("r2", "Read"),
-					result("r2"),
-					toolCall("b", "Bash"),
-					permission("b"),
-					{ type: "permission_response", request_id: "req-b", choice: "deny" },
-					result("b", true),
-				).slice(6),
-			).toEqual([
-				["[Read 2 files]", "r1↓", "r2↓", "card:b"],
-				["[Read 2 files]", "r1↓", "r2↓", "b"],
-			]);
+				shapeOf(
+					read("r1"),
+					read("r2"),
+					run("b", "Bash", "denied", asked("b", "denied")),
+				),
+			).toEqual(["[Read 2 files]", "r1↓", "r2↓", "card:b"]);
+			expect(
+				shapeOf(
+					read("r1"),
+					read("r2"),
+					run("b", "Bash", "failed", asked("b", "denied")),
+				),
+			).toEqual(["[Read 2 files]", "r1↓", "r2↓", "b"]);
 		});
 
 		// It read as stopped until its result came; the summary would swallow
 		// the chip that says it ran anyway.
 		it("keeps a call that finished after the Stop out of its group", () => {
 			expect(
-				shapes(
-					toolCall("r1", "Read"),
-					result("r1"),
-					toolCall("r2", "Read"),
-					result("r2"),
-					toolCall("b", "Bash"),
-					{ type: "interrupted" },
-					result("b"),
-				).slice(5),
-			).toEqual([
-				["[Read 2 files · 1 interrupted]", "r1↓", "r2↓", "b↓"],
-				["[Read 2 files]", "r1↓", "r2↓", "b"],
-			]);
+				shapeOf(read("r1"), read("r2"), run("b", "Bash", "interrupted")),
+			).toEqual(["[Read 2 files · 1 interrupted]", "r1↓", "r2↓", "b↓"]);
+			expect(
+				shapeOf(
+					read("r1"),
+					read("r2"),
+					run("b", "Bash", "interrupted", {
+						finished_after_stop: true,
+						result: { text: "ok" },
+					}),
+				),
+			).toEqual(["[Read 2 files]", "r1↓", "r2↓", "b"]);
 		});
 	});
 });

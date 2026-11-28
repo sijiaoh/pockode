@@ -24,6 +24,7 @@ package projection
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/session"
@@ -52,6 +53,14 @@ type Projection struct {
 	// settled: a subagent's call trailing in before the next turn begins has
 	// nothing left to report on it.
 	settledIn map[string]int
+	// t is the transcript the records make: what a chat draws, item by item
+	// (Page).
+	t transcript
+	// settled is the copy read as if nothing follows (settledView), kept
+	// until the next append: a history read off a file can end on a message
+	// waiting on the record after it, and every read of it until that record
+	// arrives would otherwise copy the whole projection again.
+	settled *Projection
 }
 
 // New is the projection of an empty history of a session run by agentType,
@@ -65,6 +74,7 @@ func New(agentType session.AgentType) *Projection {
 		delivered: map[string][]string{},
 		items:     newItemIndex(),
 		settledIn: map[string]int{},
+		t:         newTranscript(),
 	}
 }
 
@@ -79,6 +89,7 @@ func Fold(records []json.RawMessage, agentType session.AgentType) *Projection {
 // Append folds the records written after the ones already folded, oldest
 // first.
 func (p *Projection) Append(records ...json.RawMessage) {
+	p.settled = nil
 	var lines []agent.InferredLine
 	for _, raw := range records {
 		lines = p.inference.Push(lines[:0], raw)
@@ -88,21 +99,40 @@ func (p *Projection) Append(records ...json.RawMessage) {
 	}
 }
 
+// AppendWritten is Append for a record this server has just written
+// (agent.TurnInference.PushWritten): a message is folded as it lands instead
+// of with the record after it, which is what lets a live update carry it.
+func (p *Projection) AppendWritten(raw json.RawMessage) {
+	p.settled = nil
+	for _, line := range p.inference.PushWritten(nil, raw) {
+		p.fold(line)
+	}
+}
+
 // State is what the records folded so far say. It shares nothing the
 // projection goes on changing.
 func (p *Projection) State() State {
+	return p.settledView().state.clone()
+}
+
+// settledView is the projection read as if nothing follows. That is p
+// itself unless the history ends on a message whose turn is read off the
+// record after it (agent.TurnInference); then it is a copy with the message
+// folded in, since something still may follow. Never folded into.
+func (p *Projection) settledView() *Projection {
+	if p.settled != nil {
+		return p.settled
+	}
 	settled := p.inference.Settle(nil)
 	if len(settled) == 0 {
-		return p.state.clone()
+		return p
 	}
-	// The history ends on a message whose turn is read off the record after
-	// it (agent.TurnInference). Read as if nothing follows, on a copy, since
-	// something still may.
 	c := p.clone()
 	for _, line := range settled {
 		c.fold(line)
 	}
-	return c.state
+	p.settled = c
+	return c
 }
 
 func (p *Projection) clone() *Projection {
@@ -118,10 +148,15 @@ func (p *Projection) clone() *Projection {
 	}
 	c.items = p.items.clone()
 	c.settledIn = cloneMap(p.settledIn)
+	c.t = p.t.clone()
+	c.settled = nil
 	return &c
 }
 
 func (p *Projection) fold(line agent.InferredLine) {
+	p.t.begin(line)
+	defer p.t.end()
+	defer p.raiseTouched()
 	rec, err := agent.DecodeRecord(line.Raw)
 	if err != nil {
 		// A line that does not parse, or of a type this build does not know,
@@ -132,6 +167,7 @@ func (p *Projection) fold(line agent.InferredLine) {
 	for _, f := range normalize(rec) {
 		p.apply(f, line)
 	}
+	p.transcribe(rec, line)
 }
 
 // foldTurn reads the turns off the recorded turn identity: a turn_started
@@ -148,6 +184,8 @@ func (p *Projection) foldTurn(rec agent.Record, line agent.InferredLine) {
 			StartSeq:  line.Seq,
 		})
 		p.openTurn = len(p.state.Turns) - 1
+		p.t.markTurn(p.openTurn)
+		p.t.turnStarted(p.openTurn, started)
 		return
 	}
 	if p.openTurn < 0 {
@@ -163,7 +201,10 @@ func (p *Projection) foldTurn(rec agent.Record, line agent.InferredLine) {
 	}
 	turn.Ended = true
 	turn.Outcome = in.Signal.Outcome()
+	turn.EndedBy = in.Signal
 	turn.EndSeq = line.Seq
+	turn.EndedAt = endedAt(rec)
+	p.t.markTurn(p.openTurn)
 	p.openTurn = -1
 	// The turn that might still have discarded its answers is over.
 	clear(p.delivered)
@@ -188,6 +229,7 @@ func (p *Projection) apply(f fact, line agent.InferredLine) {
 		q.TurnID, q.Seq, q.Status = turnID, line.Seq, QuestionOpen
 		p.questions[q.RequestID] = append(p.questions[q.RequestID], len(p.state.Questions))
 		p.state.Questions = append(p.state.Questions, q)
+		p.onQuestionAdded(len(p.state.Questions) - 1)
 		if !q.Legacy {
 			p.state.unanswered = append(p.state.unanswered, q.RequestID)
 		}
@@ -204,6 +246,7 @@ func (p *Projection) apply(f fact, line agent.InferredLine) {
 			q.Status = QuestionDeclined
 		}
 		q.Reason, q.ResolvedAt = "", nil
+		q.DiscardedAnswer, q.DiscardedIn = nil, ""
 		if p.dropUnanswered(q.RequestID) && f.messageID != "" {
 			p.delivered[f.messageID] = append(p.delivered[f.messageID], q.RequestID)
 		}
@@ -221,22 +264,32 @@ func (p *Projection) apply(f fact, line agent.InferredLine) {
 			}
 			q.Status, q.Answer, q.AnsweredIn = QuestionWithdrawn, nil, ""
 			q.Reason, q.ResolvedAt = f.reason, f.at
+			q.DiscardedAnswer, q.DiscardedIn = nil, ""
 		}
 		p.dropUnanswered(f.requestID)
 		p.dropDelivered(f.requestID)
 
+	case messageSent:
+		p.onMessageSent(f.message)
+
 	case messageDiscarded:
+		p.onMessageDiscarded(f.messageID)
 		p.state.Discarded = append(p.state.Discarded, DiscardedMessage{
 			MessageID: f.messageID, Excerpt: f.excerpt, Seq: line.Seq, TurnID: turnID,
 		})
+		if turn := p.t.turnOf(turnID); turn >= 0 {
+			p.t.markTurn(turn)
+		}
 		if f.messageID == "" {
 			return
 		}
 		for _, requestID := range p.delivered[f.messageID] {
 			if i, ok := p.posted(requestID); ok {
 				q := &p.state.Questions[i]
+				q.DiscardedAnswer, q.DiscardedIn = q.Answer, q.AnsweredIn
 				q.Status, q.Answer, q.AnsweredIn = QuestionOpen, nil, ""
 				p.state.unanswered = append(p.state.unanswered, requestID)
+				p.t.mark(p.t.questionEntry[i])
 			}
 		}
 		delete(p.delivered, f.messageID)
@@ -253,10 +306,26 @@ func (p *Projection) apply(f fact, line agent.InferredLine) {
 		}
 		plan := &Plan{Record: f.plan, Seq: line.Seq, TurnID: turnID}
 		p.state.Plan = plan
+		p.t.markPlan()
 		if f.plan.ToolUseID != "" {
 			p.state.taskPlan = plan
 		}
 	}
+}
+
+// endedAt is the moment the record that ended a turn carries.
+func endedAt(rec agent.Record) *time.Time {
+	switch r := rec.(type) {
+	case agent.DoneRecord:
+		return r.ObservedAt
+	case agent.InterruptedRecord:
+		return r.ObservedAt
+	case agent.ProcessEndedRecord:
+		return r.ObservedAt
+	case agent.ErrorRecord:
+		return r.ObservedAt
+	}
+	return nil
 }
 
 // posted is the question_post question requestID names.

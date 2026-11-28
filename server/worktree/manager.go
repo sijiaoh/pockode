@@ -61,6 +61,10 @@ type Manager struct {
 	// reviewerEngine is the engine permission reviewers are launched with,
 	// read at review time; see SetPermissionReviewerEngine.
 	reviewerEngine permreview.EngineFunc
+	// folds keeps what SessionProjections folded of worktrees that are not
+	// loaded, across calls: paging such a session would otherwise fold its
+	// whole history again for every page.
+	folds *projection.Folds
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
@@ -95,6 +99,7 @@ func NewManager(registry *Registry, agents *agent.Registry, dataDir string, budg
 		WorktreeWatcher: watch.NewWorktreeWatcher(registry.Refresh),
 		worktrees:       make(map[string]*Worktree),
 		questions:       newQuestionIndex(),
+		folds:           projection.NewFolds(projection.DefaultLinger),
 	}
 	m.sessionChangeListeners = append(m.sessionChangeListeners, m.questions)
 	return m
@@ -1126,6 +1131,22 @@ func (m *Manager) SessionReader(name string) (session.Reader, error) {
 	return session.NewDirReader(dir), nil
 }
 
+// SessionProjections is the projection source of the named worktree's
+// sessions, as SessionReader is their reader: the loaded worktree's own
+// (Worktree.Projections), so a session it holds is read off what it keeps, or
+// for a worktree that is not loaded one over its directory that keeps what it
+// folds for as long as the file stays as it was folded (projection.Folds).
+func (m *Manager) SessionProjections(name string) (projection.Source, error) {
+	if wt, ok := m.loaded(name); ok {
+		return wt.Projections, nil
+	}
+	dir, err := m.SessionDataDir(name)
+	if err != nil {
+		return nil, err
+	}
+	return m.folds.Source(session.NewDirReader(dir)), nil
+}
+
 // SessionSource is one worktree that still has sessions stored under it.
 type SessionSource struct {
 	// Name is the worktree's name; "" is the main worktree.
@@ -1208,7 +1229,7 @@ func (m *Manager) create(name, workDir string, claim *dataDirWriter) (*Worktree,
 	gitDiffWatcher := watch.NewGitDiffWatcher(workDir)
 	sessionListWatcher := watch.NewSessionListWatcher(sessionStore, m.workStore)
 	sessionDetailWatcher := watch.NewSessionDetailWatcher(sessionStore, m.workStore)
-	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore, projections)
+	chatMessagesWatcher := watch.NewChatMessagesWatcher(projections)
 	// The process manager's data dir is this worktree's own (wtDataDir), so agent
 	// session state lands next to the session store. MCP discovery still points at
 	// the main data dir (m.dataDir), the only place server.json is written.
