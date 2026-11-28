@@ -82,6 +82,15 @@ var ErrForkAnchorNoHistory = errors.New("there is no conversation before this me
 // just because the Pockode side of it would have worked.
 var ErrForkUnsupported = errors.New("this session's agent does not support forking")
 
+// ErrRecordedNotDelivered is what a retry is told when the attempt it retries
+// wrote the message's record but then failed to hand the message over: the
+// transcript has the message, the agent does not. Not answered as a success —
+// the record existing is not the message being delivered — and not sent again
+// under the same id either, which would leave one record standing for a
+// message the agent read later than it says. Sending it as a new message is
+// the user's call.
+var ErrRecordedNotDelivered = errors.New("this message was saved but never reached the agent; send it again as a new message")
+
 // Client coordinates chat operations across session and process management.
 // It is the single entry point for programmatic chat interactions.
 type Client struct {
@@ -96,10 +105,18 @@ type Client struct {
 	settled QuestionsSettledFunc
 	// postMu keeps each PostQuestions call's questions contiguous; see there.
 	postMu sync.Mutex
+	// sending holds, by session and message id, the send under way for each
+	// (sendOnce); its channel closes when it is done. undelivered holds the
+	// sends whose record was written and whose handover then failed, with why;
+	// unrecorded the sends handed over whose record could not be written.
+	sendingMu   sync.Mutex
+	sending     map[string]chan struct{}
+	undelivered map[string]error
+	unrecorded  map[string]struct{}
 }
 
 func NewClient(store session.Store, projections projection.Source, pm *process.Manager) *Client {
-	return &Client{store: store, projections: projections, pm: pm, stream: pm.Stream()}
+	return &Client{store: store, projections: projections, pm: pm, stream: pm.Stream(), sending: map[string]chan struct{}{}, undelivered: map[string]error{}, unrecorded: map[string]struct{}{}}
 }
 
 // QuestionsSettledFunc is told when posted questions stop waiting in a session,
@@ -125,47 +142,52 @@ func (c *Client) notifySettled(sessionID string, settled []agent.SettledQuestion
 	}
 }
 
-// SendMessageExcluding sends a user message to the agent process, persists it to
-// history, and broadcasts it to every session subscriber except the given
-// notifier — the caller that has already shown the message to itself (the
-// WebSocket client that sent it).
+// SendMessage sends a user message to the agent process, persists it to
+// history, and broadcasts it to every session subscriber — the client that
+// sent it among them, which learns its own message from that broadcast like
+// every other.
 //
-// It returns where the message landed in the session's history, and the id
-// minted for it, so the caller can hand both back to the sender. This is the
-// only way the sender can learn them: the broadcast that tells every other
-// subscriber a record's seq and id is the very thing being excluded here, so
-// without this the one message a client can never name is its own (see
-// session.HistorySeq). The id is what a later record about the message names it
-// by — the read point, or the record of a Stop discarding it.
+// messageID is the id the sender minted for the message, and goes into its
+// record (agent.MessageRecord.MessageID): it is what ties the sender's own
+// copy of the message to the record, and it makes a retry safe — a send under
+// an id history already carries delivers nothing and writes nothing, and is
+// answered with the record the first attempt wrote (Sent.Retried). Empty has
+// the id minted here, for a sender that names none.
 //
 // The zero Sent when the record was not persisted — see sendEvent.
 //
 // attachments are files already in the session's attachment store; the message
 // is refused whole with ErrAttachmentsUnsupported when the agent cannot take
 // them.
-func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content string, attachments []agent.Attachment, exclude any) (Sent, error) {
-	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content}, attachments, exclude)
+func (c *Client) SendMessage(ctx context.Context, sessionID, content string, attachments []agent.Attachment, messageID string) (Sent, error) {
+	return c.sendOnce(ctx, sessionID, messageID, func() (Sent, error) {
+		return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, MessageID: messageID}, attachments)
+	})
 }
 
-// SendCommandExcluding is SendMessageExcluding for a Pockode command: content is
-// the prompt the command expanded to, which is what the agent reads and what the
-// record holds, and cmd is what the user typed. It is still the user's message —
-// the origin is theirs, so it forks and drives a work like any other.
-func (c *Client) SendCommandExcluding(ctx context.Context, sessionID, content string, cmd agent.CommandInvocation, attachments []agent.Attachment, exclude any) (Sent, error) {
-	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, Command: &cmd}, attachments, exclude)
+// SendCommand is SendMessage for a Pockode command: content is the prompt the
+// command expanded to, which is what the agent reads and what the record holds,
+// and cmd is what the user typed. It is still the user's message — the origin
+// is theirs, so it forks and drives a work like any other.
+func (c *Client) SendCommand(ctx context.Context, sessionID, content string, cmd agent.CommandInvocation, attachments []agent.Attachment, messageID string) (Sent, error) {
+	return c.sendOnce(ctx, sessionID, messageID, func() (Sent, error) {
+		return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, Command: &cmd, MessageID: messageID}, attachments)
+	})
 }
 
-// SendHTMLActionExcluding is SendMessageExcluding for something a page in the
-// chat sent on the reader's press, and returns the content the agent was sent
-// (htmlpage.ActionText). It is the user's message like any other — refused
-// while a permission request is open, folded into a running turn — but its
-// content is machine text, which is what the record's html_action says.
+// SendHTMLAction is SendMessage for something a page in the chat sent on the
+// reader's press. It is the user's message like any other — refused while a
+// permission request is open, folded into a running turn — but its content is
+// machine text (htmlpage.ActionText), which is what the record's html_action
+// says.
 //
 // The caller has checked that the page exists in the session.
-func (c *Client) SendHTMLActionExcluding(ctx context.Context, sessionID string, action htmlpage.Action, exclude any) (Sent, string, error) {
-	content := htmlpage.ActionText(action)
-	sent, err := c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, HTMLAction: &action}, nil, exclude)
-	return sent, content, err
+func (c *Client) SendHTMLAction(ctx context.Context, sessionID string, action htmlpage.Action, messageID string) (Sent, error) {
+	return c.sendOnce(ctx, sessionID, messageID, func() (Sent, error) {
+		return c.sendEvent(ctx, sessionID, agent.MessageEvent{
+			Content: htmlpage.ActionText(action), HTMLAction: &action, MessageID: messageID,
+		}, nil)
+	})
 }
 
 // SendSystemMessage sends a system-driven automatic message (kickoff, restart,
@@ -179,29 +201,136 @@ func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content strin
 		Subtype: subtype,
 		Meta:    meta,
 	}
-	_, err := c.sendEvent(ctx, sessionID, event, nil, nil)
+	_, err := c.sendEvent(ctx, sessionID, event, nil)
 	return err
 }
 
 // Sent names the record a message was written to: its address in history and
-// the id minted for it. Both are zero when the record could not be written —
-// there is then nothing to name.
+// its id. Both are zero when the record could not be written — there is then
+// nothing to name.
 type Sent struct {
 	Seq       session.HistorySeq
 	MessageID string
-	// ItemID is the transcript item the record started (projection.PageItem.ID),
-	// for a sender left out of the update that carries it; 0 when Seq is, or
-	// when it was not asked for (no sender to leave out).
-	ItemID int
-	// ObservedAt is the moment the record carries (agent.MessageEvent.ObservedAt),
-	// zero exactly when Seq is: a sender told a moment no record holds would
-	// draw a figure its next reload cannot.
-	ObservedAt time.Time
+	// Retried says the record was already in history, written by an earlier
+	// attempt at the same send: this one delivered nothing and wrote nothing,
+	// so whatever a send sets off has been set off already.
+	Retried bool
+}
+
+// sendOnce runs send unless history already holds a message under messageID,
+// in which case it answers with that record (Sent.Retried). Sends under one
+// id are taken one at a time, so a retry that arrives while the first
+// attempt is still being handed over waits for it and then finds its record,
+// rather than writing a second.
+//
+// A first attempt that was refused leaves nothing to find, and the retry is
+// sent afresh. Two outcomes leave history disagreeing with what the agent got,
+// and are remembered instead: one handed over whose record could not be
+// written is answered as sent, and one that wrote the record and then failed
+// to hand the message over has its retry refused with
+// ErrRecordedNotDelivered. Remembered only for the life of this process,
+// which is also as long as the agent the message did or did not reach lives;
+// both are rare, so the entries are never let go.
+//
+// History that cannot be read leaves the retry unanswerable, and the message
+// is sent anyway — a possible duplicate rather than a session a disk hiccup
+// has made impossible to talk to, the trade sendEvent makes too.
+func (c *Client) sendOnce(ctx context.Context, sessionID, messageID string, send func() (Sent, error)) (Sent, error) {
+	if messageID == "" {
+		return send()
+	}
+	key := sessionID + "\x00" + messageID
+	release, err := c.claimSend(ctx, key)
+	if err != nil {
+		return Sent{}, err
+	}
+	defer release()
+	c.sendingMu.Lock()
+	cause, failed := c.undelivered[key]
+	_, delivered := c.unrecorded[key]
+	c.sendingMu.Unlock()
+	switch {
+	case failed:
+		return Sent{}, fmt.Errorf("%w (%v)", ErrRecordedNotDelivered, cause)
+	case delivered:
+		return Sent{Retried: true}, nil
+	}
+	recorded, found, err := c.recorded(ctx, sessionID, messageID)
+	switch {
+	case errors.Is(err, ErrSessionNotFound):
+		return Sent{}, err
+	case err != nil:
+		slog.Warn("failed to tell whether a send is a retry; sending it anyway",
+			"sessionId", sessionID, "messageId", messageID, "error", err)
+	case found:
+		return Sent{Seq: recorded.Seq, MessageID: messageID, Retried: true}, nil
+	}
+	sent, err := send()
+	if err == nil && !sent.Seq.Valid() {
+		c.sendingMu.Lock()
+		c.unrecorded[key] = struct{}{}
+		c.sendingMu.Unlock()
+	}
+	if err != nil {
+		// Failed after its record was written: the handover. Not cancelled
+		// with the request: a sender that hung up is the one that will retry.
+		_, written, lookupErr := c.recorded(context.WithoutCancel(ctx), sessionID, messageID)
+		switch {
+		case errors.Is(lookupErr, ErrSessionNotFound):
+			// Nothing will be retried into a session that is gone.
+		case lookupErr != nil:
+			slog.Error("failed to tell whether a failed send was recorded; a retry of it will be answered as sent",
+				"sessionId", sessionID, "messageId", messageID, "error", lookupErr)
+		case written:
+			c.sendingMu.Lock()
+			c.undelivered[key] = err
+			c.sendingMu.Unlock()
+		}
+	}
+	return sent, err
+}
+
+// recorded is the record history holds under messageID, if any.
+func (c *Client) recorded(ctx context.Context, sessionID, messageID string) (projection.RecordedMessage, bool, error) {
+	msg, found, err := c.projections.Message(ctx, sessionID, messageID)
+	if errors.Is(err, session.ErrSessionNotFound) {
+		return msg, false, ErrSessionNotFound
+	}
+	if err != nil {
+		return msg, false, fmt.Errorf("look up message %s: %w", messageID, err)
+	}
+	return msg, found, nil
+}
+
+// claimSend waits until no other send holds key, then holds it until release.
+func (c *Client) claimSend(ctx context.Context, key string) (release func(), err error) {
+	for {
+		c.sendingMu.Lock()
+		busy, held := c.sending[key]
+		if !held {
+			done := make(chan struct{})
+			c.sending[key] = done
+			c.sendingMu.Unlock()
+			return func() {
+				c.sendingMu.Lock()
+				delete(c.sending, key)
+				c.sendingMu.Unlock()
+				close(done)
+			}, nil
+		}
+		c.sendingMu.Unlock()
+		select {
+		case <-busy:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // sendEvent delivers one message to the agent, records it, and tells subscribers.
-// It returns what names the record, or the zero Sent if there is none.
-func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, attachments []agent.Attachment, exclude any) (Sent, error) {
+// It returns what names the record, or the zero Sent if there is none. The
+// event's MessageID is the sender's, or minted here when it named none.
+func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, attachments []agent.Attachment) (Sent, error) {
 	proc, err := c.processToDeliverTo(ctx, sessionID, len(attachments) > 0)
 	if err != nil {
 		return Sent{}, err
@@ -210,9 +339,11 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		event.Attachments = append(event.Attachments, a.File)
 	}
 
-	// Minted here, once, for every sender: it goes into the record, to the agent
-	// that can carry it, and into the read point that names this message later.
-	event.MessageID = uuid.NewString()
+	// Once, for every sender: it goes into the record, to the agent that can
+	// carry it, and into the read point that names this message later.
+	if event.MessageID == "" {
+		event.MessageID = uuid.NewString()
+	}
 	// Minted once too, and for the same reason: the record and the turn this
 	// message may open (session.TurnState.OpenedAt) must carry one instant, or
 	// the reply's span a client reads from the record and the clock it counted
@@ -221,11 +352,11 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	receivedAt := time.Now()
 	event.ObservedAt = receivedAt
 
-	// Recorded and shown to the other subscribers before it is handed over, so
+	// Recorded and shown to the subscribers before it is handed over, so
 	// that it precedes everything the agent says in reply, on the wire as in
 	// history. A handover that fails below leaves the record standing, as the
 	// next reload would show it anyway.
-	seq, err := c.stream.Append(ctx, sessionID, event.ToRecord(), exclude)
+	seq, err := c.stream.Append(ctx, sessionID, event.ToRecord())
 	if err != nil {
 		// The prompt still goes to the agent — it is worth answering whether or not
 		// the transcript kept it, and refusing it here would turn a disk hiccup into
@@ -238,10 +369,6 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		// The id goes with it. There is no record carrying this id, so a read
 		// point naming it would name nothing.
 		event.MessageID = ""
-		// And the moment, in the sender's answer: a figure drawn from it would be
-		// gone on the next reload. The turn still opens at it — that is when the
-		// message arrived either way.
-		event.ObservedAt = time.Time{}
 	}
 
 	prompt := agent.Prompt{Text: event.Content, ID: event.MessageID, Attachments: attachments}
@@ -274,15 +401,7 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		c.noteIngested(ctx, sessionID, event.MessageID)
 	}
 
-	sent := Sent{Seq: seq, MessageID: event.MessageID, ObservedAt: event.ObservedAt}
-	if seq.Valid() && exclude != nil {
-		// The update that carries the message went to everyone but the sender,
-		// and every later one names it by its item id.
-		if sent.ItemID, err = c.projections.ItemAt(ctx, sessionID, seq); err != nil {
-			slog.Warn("failed to look up a sent message's item", "sessionId", sessionID, "seq", seq, "error", err)
-		}
-	}
-	return sent, nil
+	return Sent{Seq: seq, MessageID: event.MessageID}, nil
 }
 
 // processToDeliverTo returns the process a message is about to be handed to,
@@ -351,7 +470,7 @@ func (c *Client) processToDeliverTo(ctx context.Context, sessionID string, hasAt
 // send that succeeded.
 func (c *Client) noteIngested(ctx context.Context, sessionID, messageID string) {
 	record := agent.ObserveAt(agent.MessageIngestedEvent{MessageID: messageID}, time.Now()).ToRecord()
-	_, _ = c.stream.Append(ctx, sessionID, record, nil)
+	_, _ = c.stream.Append(ctx, sessionID, record)
 }
 
 func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, data agent.PermissionRequestData, choice agent.PermissionChoice) error {
@@ -373,7 +492,7 @@ func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, d
 		RequestID: data.RequestID,
 		Choice:    choice.Name(),
 	}, time.Now()).ToRecord()
-	_, _ = c.stream.Append(ctx, sessionID, record, nil)
+	_, _ = c.stream.Append(ctx, sessionID, record)
 	return nil
 }
 
@@ -445,7 +564,7 @@ func (c *Client) answerForReview(ctx context.Context, proc *process.Process, dat
 	}, time.Now()).ToRecord()
 	// As for a person's answer: a failed write is reported, and the answer
 	// stands.
-	_, _ = c.stream.Append(ctx, sessionID, record, nil)
+	_, _ = c.stream.Append(ctx, sessionID, record)
 	return nil
 }
 
@@ -454,7 +573,7 @@ func (c *Client) answerForReview(ctx context.Context, proc *process.Process, dat
 // for what went wrong outside the agent's own stream that the person reading
 // the session has to know.
 func (c *Client) RecordWarning(ctx context.Context, sessionID string, warning agent.WarningEvent) error {
-	if _, err := c.stream.Append(ctx, sessionID, warning.ToRecord(), nil); err != nil {
+	if _, err := c.stream.Append(ctx, sessionID, warning.ToRecord()); err != nil {
 		return fmt.Errorf("record warning: %w", err)
 	}
 	return nil
@@ -625,7 +744,7 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 		// Failing the fork rather than logging it: the warning is the only way
 		// the user learns the agent remembers nothing, and the new session has
 		// no subscriber yet to be told that it could not be written.
-		if _, err := c.stream.Append(ctx, newID, warning.ToRecord(), nil); err != nil {
+		if _, err := c.stream.Append(ctx, newID, warning.ToRecord()); err != nil {
 			return fail(fmt.Errorf("record that the fork has no agent context: %w", err))
 		}
 	}

@@ -1,9 +1,12 @@
 package projection
 
 import (
+	"errors"
+	"fmt"
+	"maps"
 	"slices"
-	"sort"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/session"
 )
 
@@ -75,12 +78,66 @@ func (p *Projection) TakeUpdate() Update {
 		return Update{}
 	}
 	p.t.changed = newChanges()
+	return p.update(slices.Collect(maps.Keys(c.turns)), slices.Collect(maps.Keys(c.entries)), c.plan)
+}
+
+// MaxResumeGap is the most records Since will answer for. Past it the
+// update would carry what a page's budget never lets a reply carry
+// (MaxPageSize), and a client is better served by a fresh page.
+const MaxResumeGap = MaxPageSize
+
+// ErrResumeUnavailable reports a Since that cannot be answered: the seq is
+// past the newest record — the history is not the one the seq was read from
+// — or further behind it than MaxResumeGap, or the history holds a line in
+// no file, whose item ids a copy cannot be trusted to share (unnumbered).
+// The caller sends a page instead.
+var ErrResumeUnavailable = errors.New("cannot resume from this seq")
+
+// Since is everything the records after seq changed, as one Update: every
+// turn and item they changed, as each stands now, and the plan if they
+// changed it. Applied to a copy that was current through seq — a page or an
+// update whose through_seq is seq, and everything before it — it makes the
+// copy what a page cut now would say about each item it holds, which is how
+// a client that lost its connection is brought up to date without being
+// sent again what it already has.
+//
+// It reads the same marks an update is made from (transcript.mark), stamped
+// with the record whose fold made them, so it is TakeUpdate taken over every
+// record after seq at once. Read as Page is, as if nothing follows.
+func (p *Projection) Since(seq session.HistorySeq) (Update, error) {
+	return p.settledView().since(seq)
+}
+
+func (p *Projection) since(seq session.HistorySeq) (Update, error) {
+	if !seq.Valid() || seq > p.t.lastSeq {
+		return Update{}, fmt.Errorf("%w: seq %d, newest record %d", ErrResumeUnavailable, seq, p.t.lastSeq)
+	}
+	if p.t.lastSeq-seq > MaxResumeGap {
+		return Update{}, fmt.Errorf("%w: %d records since seq %d, more than %d",
+			ErrResumeUnavailable, p.t.lastSeq-seq, seq, MaxResumeGap)
+	}
+	if p.t.unnumbered {
+		return Update{}, fmt.Errorf("%w: the history holds a line in no file", ErrResumeUnavailable)
+	}
+	var turns, entries []int
+	for i, changed := range p.t.turnChanged {
+		if changed > seq {
+			turns = append(turns, i)
+		}
+	}
+	for i := range p.t.entries {
+		if p.t.entries[i].changed > seq {
+			entries = append(entries, i)
+		}
+	}
+	return p.update(turns, entries, p.t.planChanged > seq), nil
+}
+
+// update is the Update for the turns and entries named, by index, and the
+// plan when plan is set.
+func (p *Projection) update(turns, entries []int, plan bool) Update {
 	u := Update{ThroughSeq: p.t.lastSeq}
 
-	turns := make([]int, 0, len(c.turns))
-	for i := range c.turns {
-		turns = append(turns, i)
-	}
 	slices.Sort(turns)
 	for _, i := range turns {
 		stretch := p.pageTurn(i, false)
@@ -89,10 +146,6 @@ func (p *Projection) TakeUpdate() Update {
 
 	// A changed item changes the last_seq of every run it is nested in, so
 	// those are sent too; and a parent goes before its children.
-	entries := make([]int, 0, len(c.entries))
-	for i := range c.entries {
-		entries = append(entries, i)
-	}
 	slices.Sort(entries)
 	sent := make(map[int]bool, len(entries))
 	var emit func(i int)
@@ -114,7 +167,7 @@ func (p *Projection) TakeUpdate() Update {
 		emit(i)
 	}
 
-	if c.plan {
+	if plan {
 		u.Plan = p.currentPlan()
 	}
 	return u
@@ -133,27 +186,26 @@ func (p *Projection) nestedIn(i int) (int, bool) {
 	return p.t.itemEntry[item], true
 }
 
-// ItemAt is the id of the item seq's record started (PageItem.ID), 0 when it
-// started none: a record that only changed items already there. It is how
-// the sender of a message, which is left out of the update that carries it,
-// learns what later updates call it.
-func (p *Projection) ItemAt(seq session.HistorySeq) int {
-	if !seq.Valid() {
-		return 0
-	}
-	// A message read off a file waits on the record after it, and is read
-	// as if nothing follows, as Page is. The entry it gets is the one the fold
-	// gives it once that record arrives.
-	return p.settledView().itemAt(seq)
+// RecordedMessage is a message record as history holds it, and where.
+type RecordedMessage struct {
+	Seq    session.HistorySeq
+	Record agent.MessageRecord
 }
 
-func (p *Projection) itemAt(seq session.HistorySeq) int {
-	entries := p.t.entries
-	i := sort.Search(len(entries), func(i int) bool { return entries[i].pos >= seq })
-	for ; i < len(entries) && entries[i].pos == seq; i++ {
-		if entries[i].numbered {
-			return i + 1
-		}
+// Message is the record carrying messageID (agent.MessageRecord.MessageID),
+// if history has one. It is how a send retried under the id its sender minted
+// finds that the first attempt already wrote it.
+func (p *Projection) Message(messageID string) (RecordedMessage, bool) {
+	if messageID == "" {
+		return RecordedMessage{}, false
 	}
-	return 0
+	// A message read off a file waits on the record after it; it is in
+	// history all the same.
+	v := p.settledView()
+	i, ok := v.t.messages[messageID]
+	if !ok {
+		return RecordedMessage{}, false
+	}
+	rec, ok := v.t.entries[i].record.(agent.MessageRecord)
+	return RecordedMessage{Seq: v.t.entries[i].pos, Record: rec}, ok
 }

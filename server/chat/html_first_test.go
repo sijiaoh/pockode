@@ -42,8 +42,8 @@ func TestClient_SwitchBeforeFirstMessageIsHonoured(t *testing.T) {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	if _, err := NewClient(store, projection.FromReader(store), pm).SendMessageExcluding(context.Background(), "sess", "hello", nil, nil); err != nil {
-		t.Fatalf("SendMessageExcluding: %v", err)
+	if _, err := NewClient(store, projection.FromReader(store), pm).SendMessage(context.Background(), "sess", "hello", nil, ""); err != nil {
+		t.Fatalf("SendMessage: %v", err)
 	}
 
 	ag.mu.Lock()

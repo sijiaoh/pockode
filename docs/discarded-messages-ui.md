@@ -60,8 +60,8 @@ Muted lines below the summary say what the press leaves out:
   thing to restore is one command — then the button restores it.
 - A message whose page is not loaded yet cannot be restored from here: the line
   says how many and to scroll up. Once its page loads it joins the press. Only
-  while older pages remain — with none left, a message the summary cannot find
-  is this tab's own, whose id is still on its way in the reply to the send.
+  while older pages remain — with none left, every message the turn names is
+  loaded.
 
 What is never offered back: an answer to posted questions (its text is the
 answers flattened for the agent, not what the user typed — what becomes of the
@@ -118,6 +118,6 @@ the button is back to `Restore to input`, which is the truth.
 ## 6. Across devices and reloads
 
 The endings come from the server's projection of the history, so every tab and
-every reload shows them alike — including the tab that pressed Stop, which
-learns its own message's id from the reply to its send ([frontend-state.md](code/frontend-state.md#discarded-messages)).
+every reload shows them alike — including the tab that sent the message, which
+minted the id the records name it by ([frontend-state.md](code/frontend-state.md#discarded-messages)).
 A restore writes the draft of the device it was pressed on only.

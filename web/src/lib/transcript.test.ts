@@ -34,10 +34,11 @@ import {
 	type ChatItems,
 	createChatItems,
 	failEcho,
+	forgetResume,
 	installNewestPage,
 	pressAnswer,
-	removeEcho,
-	settleEcho,
+	sentEcho,
+	takeBackEcho,
 } from "./chatItems";
 import { buildTranscript, createTranscriptCache } from "./transcript";
 
@@ -232,6 +233,56 @@ describe("buildTranscript", () => {
 		// A fork from the first reply cuts above the message drawn under it.
 		expect(first.anchorSeq).toBeLessThan(steer.seq as number);
 		expect(first.endedAt).toBeDefined();
+	});
+
+	// Two messages queued into one turn, read one at a time: each reply is
+	// drawn under the message it answers, and the one not read yet waits
+	// under the reply before it.
+	it("splits a turn at the message each read point names", () => {
+		const hi = msg("hi");
+		const one = text("one");
+		const first = msg("first");
+		const second = msg("second");
+		const t = turn(
+			{ ended: false },
+			hi,
+			one,
+			first,
+			second,
+			read(first.message?.message_id),
+			text("two"),
+			read(second.message?.message_id),
+			text("three"),
+		);
+		const { build } = load(page([t]));
+		expect(shape(build())).toEqual([
+			"user:hi",
+			"assistant:complete:one",
+			"user:first",
+			"assistant:complete:two",
+			"user:second",
+			"assistant:streaming:three",
+		]);
+	});
+
+	it("takes a read point naming no message waiting as read past all of them", () => {
+		const t = turn(
+			{ ended: false },
+			msg("hi"),
+			text("one"),
+			msg("first"),
+			msg("second"),
+			read(),
+			text("two"),
+		);
+		const { build } = load(page([t]));
+		expect(shape(build())).toEqual([
+			"user:hi",
+			"assistant:complete:one",
+			"user:first",
+			"user:second",
+			"assistant:streaming:two",
+		]);
 	});
 
 	it("puts a turn's ending seq on its last bubble's anchor", () => {
@@ -655,7 +706,7 @@ describe("ChatItems", () => {
 					},
 					awaitingReply: true,
 				}),
-			() => failEcho(store, "echo-lost", "timed out"),
+			() => failEcho(store, "echo-lost", "timed out", false),
 			() =>
 				applyUpdate(
 					store,
@@ -676,7 +727,7 @@ describe("ChatItems", () => {
 					}),
 					new Date(),
 				),
-			() => removeEcho(store, "echo-lost"),
+			() => takeBackEcho(store, "echo-lost", "timed out", false),
 			() =>
 				applyUpdate(
 					store,
@@ -886,9 +937,11 @@ describe("ChatItems", () => {
 });
 
 describe("a message this client sent", () => {
+	// Sent under `echo-<content>`, the id its record carries as `message_id`.
 	function send(store: ChatItems, content: string, opensTurn = true) {
 		const message: UserMessage = {
 			id: `echo-${content}`,
+			messageId: `echo-${content}`,
 			role: "user",
 			content,
 			status: "complete",
@@ -900,6 +953,46 @@ describe("a message this client sent", () => {
 			...(opensTurn ? { replyId: `reply-${content}` } : {}),
 		});
 		return message;
+	}
+
+	/** The message's own record arriving, as the turn it opened starts. */
+	function recorded(
+		store: ChatItems,
+		content: string,
+		id: number,
+		messageId = `echo-${content}`,
+	) {
+		applyUpdate(
+			store,
+			{
+				type: "update",
+				through_seq: id + 1,
+				turns: [
+					{
+						turn: {
+							turn_id: `t-${id}`,
+							origin: "prompt",
+							message_id: messageId,
+							start_seq: id + 1,
+							ended: false,
+						},
+					},
+				],
+				items: [
+					{
+						turn_id: `t-${id}`,
+						item: {
+							id,
+							kind: "message",
+							seq: id,
+							last_seq: id,
+							message: { message_id: messageId, content },
+						},
+					},
+				],
+			},
+			new Date(),
+		);
 	}
 
 	it("is drawn at once with a placeholder, and keeps its keys once recorded", () => {
@@ -914,189 +1007,160 @@ describe("a message this client sent", () => {
 			["reply-hi", "sending"],
 		]);
 
-		settleEcho(store, "echo-hi", {
-			itemId: 100,
-			seq: 100,
-			update: { messageId: "m-hi" },
-		});
-		applyUpdate(
-			store,
-			{
-				type: "update",
-				through_seq: 101,
-				turns: [
-					{
-						turn: {
-							turn_id: "t-hi",
-							origin: "prompt",
-							message_id: "m-hi",
-							start_seq: 101,
-							ended: false,
-						},
-					},
-				],
-				items: [
-					{
-						turn_id: "t-hi",
-						item: {
-							id: 100,
-							kind: "message",
-							seq: 100,
-							last_seq: 100,
-							message: { message_id: "m-hi", content: "hi" },
-						},
-					},
-				],
-			},
-			new Date(),
-		);
-		const tail = build().slice(-2);
-		expect(tail.map((m) => m.id)).toEqual(["echo-hi", "reply-hi"]);
-		expect((tail[0] as UserMessage).anchorSeq).toBe(100);
-		expect((tail[1] as AssistantMessage).status).toBe("streaming");
-	});
-
-	it("is recognised in the turn it opened before the reply says where it went", () => {
-		const { store, build } = load(page([turn({}, msg("before"))]));
-		send(store, "hi");
-		applyUpdate(
-			store,
-			{
-				type: "update",
-				through_seq: 101,
-				turns: [
-					{
-						turn: {
-							turn_id: "t-hi",
-							origin: "prompt",
-							message_id: "m-hi",
-							start_seq: 101,
-							ended: false,
-						},
-					},
-				],
-				items: [
-					{
-						turn_id: "t-hi",
-						item: {
-							id: 100,
-							kind: "message",
-							seq: 100,
-							last_seq: 100,
-							message: { message_id: "m-hi", content: "hi" },
-						},
-					},
-				],
-			},
-			new Date(),
-		);
+		recorded(store, "hi", 100);
+		sentEcho(store, "echo-hi");
 		const messages = build();
 		expect(
 			messages.filter((m) => m.role === "user" && m.content === "hi"),
 		).toHaveLength(1);
-		expect(messages.slice(-2).map((m) => m.id)).toEqual([
-			"echo-hi",
-			"reply-hi",
-		]);
+		const tail = messages.slice(-2);
+		expect(tail.map((m) => m.id)).toEqual(["echo-hi", "reply-hi"]);
+		expect((tail[0] as UserMessage).anchorSeq).toBe(100);
+		expect((tail[1] as AssistantMessage).status).toBe("streaming");
 	});
 
 	it("draws two quick sends in the order they were made", () => {
 		const { store, build } = load(page([turn({}, msg("before"))]));
 		send(store, "A");
 		send(store, "B", false);
-		settleEcho(store, "echo-A", {
-			itemId: 100,
-			seq: 100,
-			update: { messageId: "m-A" },
-		});
+		sentEcho(store, "echo-A");
 		const users = build()
 			.filter((m) => m.role === "user")
 			.map((m) => m.content);
 		expect(users).toEqual(["before", "A", "B"]);
 	});
 
-	it("lets the reply say which item a send became, over a guess", () => {
+	// Nothing about a send but its id says which record is its own: two sends
+	// of the same words, recorded in the other order, still each take theirs.
+	it("takes the record sent under its own id, whatever else matches", () => {
 		const { store, build } = load(page([turn({}, msg("before"))]));
-		send(store, "A", false);
-		send(store, "B");
-		// B's turn starts, bringing B's item before either reply.
-		applyUpdate(
-			store,
-			{
-				type: "update",
-				through_seq: 102,
-				turns: [
-					{
-						turn: {
-							turn_id: "t-B",
-							origin: "prompt",
-							message_id: "m-B",
-							start_seq: 102,
-							ended: false,
-						},
-					},
-				],
-				items: [
-					{
-						turn_id: "t-B",
-						item: {
-							id: 101,
-							kind: "message",
-							seq: 101,
-							last_seq: 101,
-							message: { message_id: "m-B", content: "B" },
-						},
-					},
-				],
-			},
-			new Date(),
-		);
-		settleEcho(store, "echo-A", {
-			itemId: 100,
-			seq: 100,
-			update: { messageId: "m-A" },
+		const first = send(store, "same", false);
+		addEcho(store, {
+			message: { ...first, id: "echo-again", messageId: "echo-again" },
+			awaitingReply: true,
 		});
-		settleEcho(store, "echo-B", {
-			itemId: 101,
-			seq: 101,
-			update: { messageId: "m-B" },
-		});
-		const users = build().filter((m) => m.role === "user");
-		expect(users.map((m) => [m.id, m.content])).toEqual([
-			[expect.any(String), "before"],
-			["echo-A", "A"],
-			["echo-B", "B"],
+		recorded(store, "same", 100, "echo-again");
+		expect(store.echoes.map((e) => [e.message.id, e.itemId])).toEqual([
+			["echo-same", undefined],
+			["echo-again", 100],
 		]);
+		recorded(store, "same", 102);
+		expect(
+			build()
+				.filter((m) => m.role === "user")
+				.map((m) => m.id),
+		).toEqual([expect.any(String), "echo-again", "echo-same"]);
+	});
+
+	// Where a send was made is named in the numbering of the instance it was
+	// made on; another instance's page says nothing of where that is — also
+	// when a resync had already said the copy could not be resumed.
+	it.each([
+		false,
+		true,
+	])("draws a send another instance has no record of at the end of its page (resync first: %s)", (resynced) => {
+		const store = createChatItems();
+		const cache = createTranscriptCache();
+		installNewestPage(
+			store,
+			page([turn({}, msg("before"))]),
+			undefined,
+			undefined,
+			"a",
+		);
+		send(store, "hi");
+		failEcho(store, "echo-hi", "Connection lost", false);
+		if (resynced) forgetResume(store);
+		installNewestPage(
+			store,
+			page([turn({}, msg("one")), turn({}, msg("two"))]),
+			undefined,
+			undefined,
+			"b",
+		);
+		const users = buildTranscript(store, cache, { live: true })
+			.filter((m) => m.role === "user")
+			.map((m) => m.content);
+		expect(users).toEqual(["one", "two", "hi"]);
 	});
 
 	it("is not drawn twice when a send that failed here was recorded after all", () => {
 		const { store, build } = load(page([turn({}, msg("before"))]));
 		send(store, "hi");
-		failEcho(store, "echo-hi", "timed out");
+		failEcho(store, "echo-hi", "timed out", false);
 		// Its own record, over a new connection after the one it went on dropped.
-		applyUpdate(
-			store,
-			{
-				type: "update",
-				through_seq: 100,
-				items: [
-					{
-						item: {
-							id: 100,
-							kind: "message",
-							seq: 100,
-							last_seq: 100,
-							message: { message_id: "m-hi", content: "hi" },
-						},
-					},
-				],
-			},
-			new Date(),
-		);
+		recorded(store, "hi", 100);
 		const hi = build().filter((m) => m.role === "user" && m.content === "hi");
 		expect(hi).toHaveLength(1);
 		expect(hi[0].id).toBe("echo-hi");
 		expect(store.echoes[0].error).toBeUndefined();
+	});
+
+	it("draws no failure once its record has arrived, whatever the reply did", () => {
+		const { store, build } = load(page([turn({}, msg("before"))]));
+		send(store, "hi");
+		recorded(store, "hi", 100);
+		failEcho(store, "echo-hi", "Connection lost", false);
+		expect(store.echoes[0].error).toBeUndefined();
+		expect(
+			build().some((m) => m.role === "assistant" && m.status === "error"),
+		).toBe(false);
+	});
+
+	// The record is written before the message is handed over, so its arriving
+	// is no proof the agent has it: a failure the server answered with stands,
+	// whichever of the two came first.
+	it("keeps a failure the server answered with, though its record arrived", () => {
+		for (const recordFirst of [true, false]) {
+			const { store, build } = load(page([turn({}, msg("before"))]));
+			send(store, "hi");
+			const fail = () =>
+				failEcho(
+					store,
+					"echo-hi",
+					"Failed to send message: stdin closed",
+					true,
+				);
+			if (!recordFirst) fail();
+			recorded(store, "hi", 100);
+			if (recordFirst) fail();
+			const messages = build();
+			expect(
+				messages.filter((m) => m.role === "user" && m.content === "hi"),
+			).toHaveLength(1);
+			// Its turn opened before the handover failed, so both are drawn.
+			expect(
+				messages
+					.slice(-3)
+					.map((m) => [m.id, m.role === "assistant" && m.status]),
+			).toEqual([
+				["echo-hi", false],
+				["echo-hi:failed", "error"],
+				["reply-hi", "streaming"],
+			]);
+			expect(messages.at(-2)).toMatchObject({
+				error: "Failed to send message: stdin closed",
+			});
+		}
+	});
+
+	it("draws a server's failure in place of the reply when no turn opened", () => {
+		const { store, build } = load(page([turn({}, msg("before"))]));
+		send(store, "hi");
+		applyUpdate(
+			store,
+			update({ items: [msg("hi", { message_id: "echo-hi" })] }),
+			new Date(),
+		);
+		failEcho(store, "echo-hi", "Failed to send message: stdin closed", true);
+		expect(
+			build()
+				.slice(-2)
+				.map((m) => [m.id, m.role === "assistant" && m.status]),
+		).toEqual([
+			["echo-hi", false],
+			["reply-hi", "error"],
+		]);
 	});
 
 	it("is not drawn twice when a fresh page already holds it", () => {
@@ -1113,7 +1177,7 @@ describe("a message this client sent", () => {
 						turn: {
 							turn_id: "t-hi",
 							origin: "prompt",
-							message_id: "m-hi",
+							message_id: "echo-hi",
 							start_seq: 101,
 							ended: false,
 						},
@@ -1123,7 +1187,7 @@ describe("a message this client sent", () => {
 								kind: "message",
 								seq: 100,
 								last_seq: 100,
-								message: { message_id: "m-hi", content: "hi" },
+								message: { message_id: "echo-hi", content: "hi" },
 							},
 						],
 					},

@@ -158,13 +158,8 @@ function normalizeRecordedAccount(raw: unknown): RecordedAccount | undefined {
 		: { agent };
 }
 
-/**
- * A message's `command`, kept only when it names one. Also reads the same
- * field on the `chat.message` reply.
- */
-export function normalizeCommand(
-	raw: unknown,
-): PockodeCommandInvocation | undefined {
+/** A message's `command`, kept only when it names one. */
+function normalizeCommand(raw: unknown): PockodeCommandInvocation | undefined {
 	const fields = raw as Record<string, unknown> | null | undefined;
 	if (typeof fields?.name !== "string" || !fields.name) return undefined;
 	return typeof fields.args === "string" && fields.args
@@ -172,11 +167,8 @@ export function normalizeCommand(
 		: { name: fields.name };
 }
 
-/**
- * A message's `html_action`, kept only when it names a page and an action.
- * Also reads the same field on the `chat.html_action` reply.
- */
-export function normalizeHtmlAction(raw: unknown): HtmlAction | undefined {
+/** A message's `html_action`, kept only when it names a page and an action. */
+function normalizeHtmlAction(raw: unknown): HtmlAction | undefined {
 	const fields = raw as Record<string, unknown> | null | undefined;
 	if (typeof fields?.page !== "string" || !fields.page) return undefined;
 	if (typeof fields.action !== "string" || !fields.action) return undefined;
@@ -509,6 +501,19 @@ interface Draft {
 	startNotLoaded?: boolean;
 }
 
+/**
+ * The failed reply drawn under a send that failed, in place of its reply —
+ * under the reply's key, unless a reply is drawn as well (`beside`).
+ */
+function failureOf(echo: Echo | undefined, beside = false): Draft | undefined {
+	if (echo?.error === undefined) return undefined;
+	return {
+		id: (!beside && echo.replyId) || `${echo.message.id}:failed`,
+		nodes: [],
+		error: { text: echo.error },
+	};
+}
+
 function buildStretch(
 	store: ChatItems,
 	cache: TranscriptCache,
@@ -523,14 +528,25 @@ function buildStretch(
 	// was being written when they arrived, once that reply is closed — with a
 	// failed send's reason under its message.
 	let unread: (UserMessage | Draft)[] = [];
-	const close = (endedAt?: number) => {
+	// `read` is the message a read point names: it and those queued before it
+	// were read, and the ones queued behind it go on waiting under the reply
+	// it opens. Every tab knows a message by that id — the sender too, which
+	// minted it — so all of them cut the turn alike. A read point naming none
+	// loaded, or none at all, was read past every message waiting.
+	const close = (endedAt?: number, read?: string) => {
 		if (draft) {
 			if (endedAt !== undefined) draft.endedAt = endedAt;
 			rows.push(draft);
 			draft = undefined;
 		}
-		rows.push(...unread);
-		unread = [];
+		const at = read
+			? unread.findIndex((row) => !("nodes" in row) && row.messageId === read)
+			: -1;
+		let end = at < 0 ? unread.length : at + 1;
+		// A failed send's reason stays under its message.
+		while (end < unread.length && "nodes" in unread[end]) end++;
+		rows.push(...unread.slice(0, end));
+		unread = unread.slice(end);
 	};
 	const firstBubbleId = (): string => {
 		const opener = stretch.nodes.find((n) => isOpener(n, turn));
@@ -544,14 +560,7 @@ function buildStretch(
 		const { item } = node;
 		if (node.echo) {
 			const { echo } = node;
-			const failure: Draft | undefined =
-				echo.error !== undefined
-					? {
-							id: echo.replyId ?? `${echo.message.id}:failed`,
-							nodes: [],
-							error: { text: echo.error },
-						}
-					: undefined;
+			const failure = failureOf(echo);
 			if ((turn || draft?.sending) && draft) {
 				unread.push(echo.message, ...(failure ? [failure] : []));
 			} else {
@@ -560,12 +569,8 @@ function buildStretch(
 				if (failure) rows.push(failure);
 				else if (echo.replyId) {
 					// Sent to an idle agent: its reply is drawn at once.
-					draft = {
-						id: echo.replyId,
-						nodes: [],
-						openedAt: echo.openedAt,
-						sending: true,
-					};
+					// When it began is the record's to say, which is not here yet.
+					draft = { id: echo.replyId, nodes: [], sending: true };
 				}
 			}
 			continue;
@@ -575,6 +580,10 @@ function buildStretch(
 			if (main && isOpener(node, turn) && !opened) {
 				close();
 				rows.push(message);
+				// The turn opened before the handover failed, and says how it
+				// ended in its own bubble; the failure is said under the message.
+				const failure = failureOf(ctx.aliases.byItem.get(node.id), true);
+				if (failure) rows.push(failure);
 				opened = true;
 				draft = {
 					id: firstBubbleId(),
@@ -582,7 +591,9 @@ function buildStretch(
 					openedAt: serverTime(item.message?.observed_at),
 				};
 			} else if ((turn || draft?.sending) && draft) {
-				unread.push(message);
+				// Recorded, and then not handed over: the server said so.
+				const failure = failureOf(ctx.aliases.byItem.get(node.id));
+				unread.push(message, ...(failure ? [failure] : []));
 			} else {
 				close();
 				rows.push(message);
@@ -591,11 +602,13 @@ function buildStretch(
 				// the turn takes the message in. Only this client's own — a message
 				// whose turn never started is not proof of a reply on its way.
 				const echo = ctx.aliases.byItem.get(node.id);
-				if (!turn && echo?.replyId && ctx.last) {
+				const failure = failureOf(echo);
+				if (failure) rows.push(failure);
+				else if (!turn && echo?.replyId && ctx.last) {
 					draft = {
 						id: echo.replyId,
 						nodes: [],
-						openedAt: echo.openedAt ?? serverTime(item.message?.observed_at),
+						openedAt: serverTime(item.message?.observed_at),
 						sending: true,
 					};
 				}
@@ -604,7 +617,7 @@ function buildStretch(
 		}
 		if (item.kind === "read") {
 			const at = serverTime(item.read?.observed_at);
-			close(at);
+			close(at, item.read?.message_id);
 			draft = {
 				id: `read:${node.partId}`,
 				nodes: [],
@@ -789,6 +802,7 @@ function userMessage(
 		...(command ? { command } : {}),
 		...(attachments ? { attachments } : {}),
 		...(htmlAction ? { htmlAction } : {}),
+		...(m.discarded ? { discarded: true } : {}),
 	};
 	cache.users.set(node, message);
 	return message;
@@ -1362,11 +1376,11 @@ function questionPart(node: ItemNode, item: QuestionItem): QuestionCard {
 					...item,
 					status: item.discarded_answer.declined ? "declined" : "answered",
 					answer: item.discarded_answer,
-					answered_in: item.discarded_in,
 				}
 			: item;
 	const status = QUESTION_STATUS[q.status] ?? "pending";
 	const reason = normalizeExpiryReason(q.reason);
+	const unread = q !== item;
 	return {
 		id: node.partId,
 		type: "question_record",
@@ -1384,9 +1398,7 @@ function questionPart(node: ItemNode, item: QuestionItem): QuestionCard {
 		...(q.answer && (status === "answered" || status === "declined")
 			? { answer: q.answer as QuestionAnswerRecord }
 			: {}),
-		...(q.answered_in && (status === "answered" || status === "declined")
-			? { answerMessageId: q.answered_in }
-			: {}),
+		...(unread ? { unread: true } : {}),
 		...(status === "cancelled" && reason ? { reason } : {}),
 		...(q.legacy ? { legacy: true, toolUseId: q.tool_use_id } : {}),
 	};

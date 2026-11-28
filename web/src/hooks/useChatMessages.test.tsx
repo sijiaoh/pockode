@@ -2,13 +2,12 @@ import { act, render, waitFor } from "@testing-library/react";
 import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { useLayoutEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SentMessage } from "../lib/rpc";
-import type { SentHtmlAction } from "../lib/rpc/chat";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
 import {
 	changedTool,
 	ended,
 	msg,
+	nextSeq,
 	noTurn,
 	page,
 	resetItems,
@@ -19,7 +18,7 @@ import {
 	update,
 } from "../test/chatItemsFixture";
 import { makeSessionDetail } from "../test/sessionFixtures";
-import type { ChatPage, PageTurn } from "../types/chatItems";
+import type { ChatPage, MessageItem, PageTurn } from "../types/chatItems";
 import type {
 	AssistantMessage,
 	ChatNotification,
@@ -34,13 +33,25 @@ import { useChatMessages } from "./useChatMessages";
 const mockState = vi.hoisted(() => ({
 	/** Drives a reconnect: see `reconnect` below. */
 	status: "connected",
+	/** `AuthResult.server_instance` of the connection that is up. */
+	serverInstance: "",
 	chatMessagesSubscribe: vi.fn(),
 	chatMessagesHistory: vi.fn(),
 	chatMessagesUnsubscribe: vi.fn(async () => {}),
-	// Mirrors ChatActions.sendMessage: it resolves with what the server said
-	// about the message — its seq, when it has an address to give.
-	sendMessage: vi.fn((): Promise<SentMessage> => Promise.resolve({})),
-	sendHtmlAction: vi.fn((): Promise<SentHtmlAction> => Promise.resolve({})),
+	// Mirrors ChatActions.sendMessage: it resolves once the server has the
+	// message, and says nothing more — the record arrives on the subscription.
+	sendMessage: vi.fn(
+		(
+			_sessionId: string,
+			_messageId: string,
+			_content: string,
+			..._rest: unknown[]
+		): Promise<void> => Promise.resolve(),
+	),
+	sendHtmlAction: vi.fn(
+		(_sessionId: string, _messageId: string, _action: unknown): Promise<void> =>
+			Promise.resolve(),
+	),
 	invalidateCommandCache: vi.fn(),
 }));
 
@@ -48,6 +59,9 @@ vi.mock("../lib/wsStore", () => {
 	const state = {
 		get status() {
 			return mockState.status;
+		},
+		get serverInstance() {
+			return mockState.serverInstance;
 		},
 		actions: {
 			chatMessagesSubscribe: mockState.chatMessagesSubscribe,
@@ -70,6 +84,8 @@ vi.mock("../lib/wsStore", () => {
 		isInvalidParamsRejection: (error: unknown) =>
 			error instanceof JSONRPCErrorException &&
 			error.code === JSONRPCErrorCode.InvalidParams,
+		isServerRejection: (error: unknown) =>
+			error instanceof JSONRPCErrorException && error.code !== 0,
 		isPermissionReviewerRejection: (error: unknown) =>
 			error instanceof JSONRPCErrorException &&
 			error.code === JSONRPCErrorCode.InvalidParams &&
@@ -87,6 +103,32 @@ function setDetailTurn(sessionId: string, turn: SessionDetail["turn"]) {
 const IDLE = { phase: "idle", open: false, since: "" } as const;
 const RUNNING_TURN = { phase: "running", open: true, since: "" } as const;
 
+/** Where the transcript's subscription, whichever it is, is told things. */
+let notifySubscriber: (n: ChatNotification) => void = () => {};
+
+/**
+ * The server's half of a send: the message's record, broadcast to every
+ * subscriber — the sender too — under the id the client sent it with.
+ */
+function broadcastRecord(
+	messageId: string,
+	content: string,
+	fields: Partial<MessageItem> = {},
+) {
+	const item = msg(content, { message_id: messageId, ...fields });
+	notifySubscriber(update({ items: [item] }));
+	return item;
+}
+
+/** Answers every `chat.message` as the server does: recorded, then replied to. */
+function recordSends(
+	fields: (content: string) => Partial<MessageItem> = () => ({}),
+) {
+	mockState.sendMessage.mockImplementation(async (_s, id, content) => {
+		broadcastRecord(id, content, fields(content));
+	});
+}
+
 /** A subscription whose snapshot is `p`, handing the test its callback. */
 function subscribeWith(
 	p: () => ChatPage,
@@ -99,6 +141,7 @@ function subscribeWith(
 			onNotification: (n: ChatNotification) => void,
 		) => {
 			handle.notify = onNotification;
+			notifySubscriber = onNotification;
 			return { id: "sub-1", initial: { ...p(), turn: IDLE, ...rest } };
 		},
 	);
@@ -169,22 +212,30 @@ describe("useChatMessages", () => {
 	beforeEach(() => {
 		committed.length = 0;
 		mockState.status = "connected";
+		mockState.serverInstance = "";
 		mockState.sendMessage.mockReset();
-		mockState.sendMessage.mockResolvedValue({});
+		mockState.sendMessage.mockResolvedValue();
 		mockState.sendHtmlAction.mockReset();
-		mockState.sendHtmlAction.mockResolvedValue({});
+		mockState.sendHtmlAction.mockResolvedValue();
+		notifySubscriber = () => {};
 		mockState.invalidateCommandCache.mockClear();
 		mockState.chatMessagesHistory.mockReset();
 		useSessionDetailStore.getState().clear();
 		resetItems();
 		mockState.chatMessagesSubscribe.mockImplementation(
-			async (sessionId: string) => ({
-				id: `sub-${sessionId}`,
-				initial: {
-					...page([turn({}, msg(`message of ${sessionId}`), text("ok"))]),
-					turn: IDLE,
-				},
-			}),
+			async (
+				sessionId: string,
+				onNotification: (n: ChatNotification) => void,
+			) => {
+				notifySubscriber = onNotification;
+				return {
+					id: `sub-${sessionId}`,
+					initial: {
+						...page([turn({}, msg(`message of ${sessionId}`), text("ok"))]),
+						turn: IDLE,
+					},
+				};
+			},
 		);
 	});
 
@@ -234,14 +285,33 @@ describe("useChatMessages", () => {
 		expect((latest.messages.at(-1) as AssistantMessage).status).toBe("sending");
 	});
 
-	// The message a client sends itself is the one it is never told the seq of:
-	// the broadcast that carries every other record's address deliberately skips
-	// the sender. Without the seq from the reply, forking from your own prompt —
-	// the whole point of the action, right when the answer disappoints — stays
-	// greyed out until the session is reloaded.
-	it("can fork from a message it just sent, without a reload", async () => {
-		mockState.sendMessage.mockResolvedValue({ seq: 4 });
+	// A fork names its cut by the record's seq, which the echo gets once its
+	// own record arrives — on the subscription, like every other tab's.
+	it("can fork from a message it just sent once its record arrives", async () => {
+		const { latest, send } = renderSendProbe();
+		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
 
+		await act(async () => {
+			await send.current("Try again");
+		});
+		// Sent, and not recorded yet: nothing to cut at.
+		expect(isForkableMessage(findSent(latest.messages))).toBe(false);
+
+		const [, id] = mockState.sendMessage.mock.calls[0];
+		let record = msg("");
+		act(() => {
+			record = broadcastRecord(id, "Try again");
+		});
+
+		const sent = findSent(latest.messages);
+		expect(sent.anchorSeq).toBe(record.seq);
+		expect(isForkableMessage(sent)).toBe(true);
+	});
+
+	// The echo is the sender's own message from the first frame, under the id
+	// it is sent with — the id its record will carry.
+	it("sends under the id the echo is drawn with", async () => {
+		recordSends();
 		const { latest, send } = renderSendProbe();
 		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
 
@@ -249,16 +319,21 @@ describe("useChatMessages", () => {
 			await send.current("Try again");
 		});
 
+		const [, id] = mockState.sendMessage.mock.calls[0];
 		const sent = findSent(latest.messages);
-		expect(sent.anchorSeq).toBe(4);
-		expect(isForkableMessage(sent)).toBe(true);
+		expect(sent).toMatchObject({ id, messageId: id });
+		expect(
+			latest.messages.filter(
+				(m) => m.role === "user" && m.content === "Try again",
+			),
+		).toHaveLength(1);
 	});
 
-	// The reply this message opens is drawn here from the echo's placeholder, and
-	// no record ever reaches this tab to say when it began; the send's answer
-	// does (docs/tool-call-ui.md#where-the-duration-comes-from).
-	it("starts the reply it opened at the moment the server answered with", async () => {
-		mockState.sendMessage.mockResolvedValue({ seq: 4, observedAt: 1234 });
+	// The reply this message opens is drawn from the echo's placeholder, and
+	// counted from the moment its record carries
+	// (docs/tool-call-ui.md#where-the-duration-comes-from).
+	it("starts the reply it opened at the moment its record carries", async () => {
+		recordSends(() => ({ observed_at: "2026-01-01T00:00:01Z" }));
 
 		const { latest, send } = renderSendProbe();
 		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
@@ -269,35 +344,15 @@ describe("useChatMessages", () => {
 
 		const reply = latest.messages.at(-1) as AssistantMessage;
 		expect(reply.role).toBe("assistant");
-		expect(reply.openedAt).toBe(1234);
+		expect(reply.openedAt).toBe(Date.parse("2026-01-01T00:00:01Z"));
 	});
 
-	// Purely additive on the wire: a server that predates the seq answers with an
-	// empty result. The message simply stays unaddressable, as every locally sent
-	// one used to be — it must not fail the send or blank the fork icon's row.
-	it("sends normally against a server that replies with no seq", async () => {
-		mockState.sendMessage.mockResolvedValue({});
-
-		const { latest, send } = renderSendProbe();
-		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
-
-		let ok = false;
-		await act(async () => {
-			ok = await send.current("Try again");
-		});
-
-		expect(ok).toBe(true);
-		const sent = findSent(latest.messages);
-		expect(sent.anchorSeq).toBeUndefined();
-		expect(isForkableMessage(sent)).toBe(false);
-	});
-
-	// The sender is left out of the broadcast, so its own command is drawn from
-	// what it typed until the reply brings the prompt the agent was actually sent.
-	it("echoes a Pockode command as the command and fills in its prompt from the reply", async () => {
-		let reply: (result: SentMessage) => void = () => {};
+	// Drawn from what was typed until the record brings the prompt the agent
+	// was actually sent.
+	it("echoes a Pockode command as the command and fills in its prompt from the record", async () => {
+		let reply: () => void = () => {};
 		mockState.sendMessage.mockReturnValueOnce(
-			new Promise((resolve) => {
+			new Promise<void>((resolve) => {
 				reply = resolve;
 			}),
 		);
@@ -318,32 +373,27 @@ describe("useChatMessages", () => {
 		});
 
 		// A parse of its own, so the test can tell whose the row ends up with.
+		const [, id] = mockState.sendMessage.mock.calls[0];
+		let record = msg("");
 		await act(async () => {
-			reply({
-				seq: 5,
-				expanded: {
-					content: "Lead the work…",
-					command: { name: "pockode-lead", args: "server's parse" },
-				},
+			record = broadcastRecord(id, "Lead the work…", {
+				command: { name: "pockode-lead", args: "server's parse" },
 			});
+			reply();
 			await sending;
 		});
 
 		expect(echo()).toMatchObject({
+			id,
 			content: "Lead the work…",
 			command: { name: "pockode-lead", args: "server's parse" },
-			anchorSeq: 5,
+			anchorSeq: record.seq,
 		});
 	});
 
 	// The server writes an answering message's body, so the echo starts empty
-	// and takes the body from the reply — what a fork from it, or its preview,
-	// would otherwise only see after a reload.
+	// and takes the body from its record.
 	it("fills an answer's echo with the body the server wrote", async () => {
-		mockState.sendMessage.mockResolvedValueOnce({
-			seq: 7,
-			expanded: { content: "Answering:\n\nQ: Which?\nA: SQLite" },
-		});
 		const answering: QuestionAnswerRecord[] = [
 			{
 				request_id: "q1",
@@ -352,6 +402,10 @@ describe("useChatMessages", () => {
 				answered_at: "2026-01-01T00:00:00Z",
 			},
 		];
+		recordSends(() => ({
+			content: "Answering:\n\nQ: Which?\nA: SQLite",
+			answering,
+		}));
 
 		const { latest, send } = renderSendProbe();
 		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
@@ -359,19 +413,17 @@ describe("useChatMessages", () => {
 			await send.current("", answering);
 		});
 
-		expect(
-			latest.messages.find((m) => m.role === "user" && m.answering),
-		).toMatchObject({
+		const [, id] = mockState.sendMessage.mock.calls[0];
+		expect(latest.messages.find((m) => m.id === id)).toMatchObject({
 			content: "Answering:\n\nQ: Which?\nA: SQLite",
-			anchorSeq: 7,
+			answering,
 		});
 	});
 
-	// The echo has only the browser's guess at each file; the reply has what the
-	// server read from the stored bytes, and that is what stays on screen.
-	it("sends files by id and fills their echo from the reply", async () => {
-		mockState.sendMessage.mockResolvedValueOnce({
-			seq: 3,
+	// The echo has only the browser's guess at each file; the record has what
+	// the server read from the stored bytes, and that is what stays on screen.
+	it("sends files by id and fills their echo from the record", async () => {
+		recordSends(() => ({
 			attachments: [
 				{
 					name: "shot.png",
@@ -382,7 +434,7 @@ describe("useChatMessages", () => {
 					attachment_id: "abc.png",
 				},
 			],
-		});
+		}));
 		const file = { id: "abc.png", name: "shot.png", size: 5, mime: "" };
 
 		const { latest, send } = renderSendProbe();
@@ -393,6 +445,7 @@ describe("useChatMessages", () => {
 
 		expect(mockState.sendMessage).toHaveBeenCalledWith(
 			expect.anything(),
+			expect.any(String),
 			"",
 			undefined,
 			[{ id: "abc.png", name: "shot.png" }],
@@ -401,7 +454,6 @@ describe("useChatMessages", () => {
 			latest.messages.find((m) => m.role === "user" && m.attachments),
 		).toMatchObject({
 			attachments: [{ mime: "image/png", width: 3, attachment_id: "abc.png" }],
-			anchorSeq: 3,
 		});
 	});
 
@@ -456,9 +508,9 @@ describe("useChatMessages", () => {
 	// The server records a slash command's use only once the send has gone
 	// through, so a palette list cached before then would be missing it.
 	it("drops the cached command list only after a slash command is accepted", async () => {
-		let reply: (result: SentMessage) => void = () => {};
+		let reply: () => void = () => {};
 		mockState.sendMessage.mockReturnValueOnce(
-			new Promise((resolve) => {
+			new Promise<void>((resolve) => {
 				reply = resolve;
 			}),
 		);
@@ -473,7 +525,7 @@ describe("useChatMessages", () => {
 		expect(mockState.invalidateCommandCache).not.toHaveBeenCalled();
 
 		await act(async () => {
-			reply({ seq: 5 });
+			reply();
 			await sending;
 		});
 		expect(mockState.invalidateCommandCache).toHaveBeenCalledOnce();
@@ -773,6 +825,9 @@ describe("useChatMessages", () => {
 	// will send nothing more on it. What it lost here is the turn's end, so
 	// without a fresh snapshot the bubble would stream forever.
 	it("replaces the transcript with a fresh subscription's snapshot on resync", async () => {
+		// A copy that could be resumed, which a resync must not resume: the
+		// hole it reports is one the copy cannot vouch past.
+		mockState.serverInstance = "instance-1";
 		let notify: (notification: ChatNotification) => void = () => {};
 		let subscriptions = 0;
 		mockState.chatMessagesUnsubscribe.mockClear();
@@ -814,6 +869,7 @@ describe("useChatMessages", () => {
 		);
 		expect(mockState.chatMessagesUnsubscribe).toHaveBeenCalledWith("sub-1");
 		expect(subscriptions).toBe(2);
+		expect(mockState.chatMessagesSubscribe.mock.calls[1][2]).toBeUndefined();
 		// Replaced, not appended to.
 		expect(messages).toHaveLength(2);
 		expect(messages[1]).toMatchObject({
@@ -823,16 +879,10 @@ describe("useChatMessages", () => {
 	});
 
 	describe("a message it sent", () => {
-		// The sender is left out of the update carrying its own message, so the
-		// item is written from the reply — and the bubble the user watched
-		// appear is the one that stays, under the same keys.
+		// The bubble the user watched appear is the one that stays, under the
+		// same keys, once the record carrying its id arrives.
 		it("keeps its bubbles when the transcript takes the message in", async () => {
 			const sub = subscribeWith(() => page([turn({}, msg("before"))]));
-			mockState.sendMessage.mockResolvedValue({
-				seq: 50,
-				itemId: 50,
-				messageId: "m50",
-			});
 
 			const { latest, send } = renderSendProbe();
 			await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
@@ -842,34 +892,25 @@ describe("useChatMessages", () => {
 			const [echo, reply] = latest.messages.slice(-2);
 			expect(reply).toMatchObject({ role: "assistant", status: "sending" });
 
+			const [, id] = mockState.sendMessage.mock.calls[0];
+			const recorded = msg("Try again", { message_id: id });
 			act(() =>
-				sub.notify({
-					type: "update",
-					through_seq: 51,
-					turns: [
-						{
-							turn: {
-								turn_id: "t50",
-								origin: "prompt",
-								message_id: "m50",
-								start_seq: 51,
-								ended: false,
+				sub.notify(
+					update({
+						turns: [
+							{
+								turn: {
+									turn_id: "t-sent",
+									origin: "prompt",
+									message_id: id,
+									start_seq: recorded.seq,
+									ended: false,
+								},
 							},
-						},
-					],
-					items: [
-						{
-							turn_id: "t50",
-							item: {
-								id: 50,
-								kind: "message",
-								seq: 50,
-								last_seq: 50,
-								message: { message_id: "m50", content: "Try again" },
-							},
-						},
-					],
-				}),
+						],
+						items: [{ item: recorded, turn_id: "t-sent" }],
+					}),
+				),
 			);
 			const after = latest.messages.slice(-2);
 			expect(after.map((m) => m.id)).toEqual([echo.id, reply.id]);
@@ -880,46 +921,174 @@ describe("useChatMessages", () => {
 				),
 			).toHaveLength(1);
 		});
+
+		// Its record may arrive before the reply does, or after a reply lost
+		// with the connection: either way, it is the message, not a failure.
+		it("is reconciled by its record when the reply never comes", async () => {
+			mockState.sendMessage.mockImplementationOnce(async (_s, id, content) => {
+				broadcastRecord(id, content);
+				throw new JSONRPCErrorException("Connection lost", 0);
+			});
+			const { latest, send } = renderSendProbe();
+			await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+
+			await act(async () => {
+				await send.current("Try again");
+			});
+
+			expect(
+				latest.messages.filter(
+					(m) => m.role === "user" && m.content === "Try again",
+				),
+			).toHaveLength(1);
+			expect(
+				latest.messages.some((m) => m.role === "assistant" && m.error),
+			).toBe(false);
+		});
+
+		// The record is written before the message is handed to the agent, so a
+		// failure the server answers with outlives the record reaching this tab.
+		it("keeps a failure the server answered with, though its record arrived", async () => {
+			mockState.sendMessage.mockImplementationOnce(async (_s, id, content) => {
+				broadcastRecord(id, content);
+				throw new JSONRPCErrorException(
+					"stdin closed",
+					JSONRPCErrorCode.InternalError,
+				);
+			});
+			const { latest, send } = renderSendProbe();
+			await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+
+			await act(async () => {
+				await send.current("Try again");
+			});
+
+			expect(
+				latest.messages.filter(
+					(m) => m.role === "user" && m.content === "Try again",
+				),
+			).toHaveLength(1);
+			expect(latest.messages.at(-1)).toMatchObject({
+				role: "assistant",
+				status: "error",
+				error: "Failed to send message: stdin closed",
+			});
+		});
+
+		// An answer is taken back when its send fails, for the sheet holds the
+		// drafts — but not once its record is in: it was written, so it stays,
+		// with the failure under it, and the sheet still hears.
+		it("keeps a failed answer whose record arrived, and rethrows", async () => {
+			const answering: QuestionAnswerRecord[] = [
+				{
+					request_id: "q1",
+					question: "Which?",
+					answers: ["SQLite"],
+					answered_at: "2026-01-01T00:00:00Z",
+				},
+			];
+			mockState.sendMessage.mockImplementationOnce(async (_s, id) => {
+				broadcastRecord(id, "Answering:\n\nQ: Which?\nA: SQLite", {
+					answering,
+				});
+				throw new JSONRPCErrorException(
+					"stdin closed",
+					JSONRPCErrorCode.InternalError,
+				);
+			});
+			const { latest, send } = renderSendProbe();
+			await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+
+			await act(async () => {
+				await expect(send.current("", answering)).rejects.toThrow(
+					"stdin closed",
+				);
+			});
+
+			const [, id] = mockState.sendMessage.mock.calls[0];
+			expect(latest.messages.find((m) => m.id === id)).toMatchObject({
+				answering,
+			});
+			expect(latest.messages.at(-1)).toMatchObject({
+				role: "assistant",
+				status: "error",
+				error: "Failed to send message: stdin closed",
+			});
+		});
+
+		// Only the server can say a recorded answer never reached the agent; a
+		// reply lost with the connection says nothing of the kind.
+		it("draws an answer whose record arrived as sent when only the connection failed", async () => {
+			const answering: QuestionAnswerRecord[] = [
+				{
+					request_id: "q1",
+					question: "Which?",
+					answers: ["SQLite"],
+					answered_at: "2026-01-01T00:00:00Z",
+				},
+			];
+			mockState.sendMessage.mockImplementationOnce(async (_s, id) => {
+				broadcastRecord(id, "Answering:\n\nQ: Which?\nA: SQLite", {
+					answering,
+				});
+				throw new Error("Connection lost");
+			});
+			const { latest, send } = renderSendProbe();
+			await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+
+			await act(async () => {
+				await expect(send.current("", answering)).rejects.toThrow(
+					"Connection lost",
+				);
+			});
+
+			const [, id] = mockState.sendMessage.mock.calls[0];
+			expect(latest.messages.find((m) => m.id === id)).toMatchObject({
+				answering,
+			});
+			expect(latest.messages.some((m) => m.status === "error")).toBe(false);
+		});
 	});
 
 	describe("a page's send", () => {
 		const ACTION = { page: "p3", action: "approve", data: { id: "42" } };
 
 		// Drawn from the action at once; the agent's text is the server's, and
-		// the sender is left out of the broadcast that would carry it.
-		it("is echoed as the action, then filled in from the reply", async () => {
-			let reply: (result: SentHtmlAction) => void = () => {};
-			mockState.sendHtmlAction.mockReturnValueOnce(
-				new Promise((resolve) => {
-					reply = resolve;
-				}),
-			);
+		// arrives with the record.
+		it("is echoed as the action, then filled in from its record", async () => {
 			const { latest, send } = renderActionProbe();
 			await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
 
-			let sending: Promise<void> = Promise.resolve();
-			act(() => {
-				sending = send.current(ACTION);
+			await act(async () => {
+				await send.current(ACTION);
 			});
-			expect(mockState.sendHtmlAction).toHaveBeenCalledWith("s1", ACTION);
+			expect(mockState.sendHtmlAction).toHaveBeenCalledWith(
+				"s1",
+				expect.any(String),
+				ACTION,
+			);
+			const [, id] = mockState.sendHtmlAction.mock.calls[0];
 			expect(findAction(latest.messages)).toMatchObject({
+				id,
 				content: "",
 				htmlAction: ACTION,
 			});
 
-			await act(async () => {
-				reply({
-					seq: 6,
-					messageId: "m6",
-					content: 'Page action "approve" from p3:\n{"id":"42"}',
-					htmlAction: ACTION,
-				});
-				await sending;
+			let record = msg("");
+			act(() => {
+				record = broadcastRecord(
+					id,
+					'Page action "approve" from p3:\n{"id":"42"}',
+					{
+						html_action: ACTION,
+					},
+				);
 			});
 			expect(findAction(latest.messages)).toMatchObject({
+				id,
 				content: 'Page action "approve" from p3:\n{"id":"42"}',
-				messageId: "m6",
-				anchorSeq: 6,
+				messageId: id,
+				anchorSeq: record.seq,
 			});
 		});
 
@@ -1290,6 +1459,227 @@ describe("useChatMessages", () => {
 				role: "user",
 				content: "Earlier question",
 			});
+		});
+
+		/**
+		 * Subscribes with the newest page, then answers each re-subscribe with
+		 * what `again` returns; hands back what each subscribe was asked.
+		 */
+		function subscribeThen(again: () => Record<string, unknown>): {
+			calls: () => unknown[][];
+		} {
+			let subscribes = 0;
+			mockState.chatMessagesSubscribe.mockClear();
+			mockState.chatMessagesSubscribe.mockImplementation(async () => {
+				subscribes++;
+				const initial =
+					subscribes === 1
+						? {
+								...page([turn({ continued: true }, text("tail"))], {
+									has_more: true,
+									next_before_seq: 7,
+								}),
+								turn: IDLE,
+								delivery: "snapshot",
+							}
+						: { turn: IDLE, ...again() };
+				return { id: `sub-${subscribes}`, initial };
+			});
+			return { calls: () => mockState.chatMessagesSubscribe.mock.calls };
+		}
+
+		function contents(messages: Message[]): string[] {
+			return messages.flatMap((m) =>
+				m.role === "user"
+					? [m.content]
+					: m.parts.flatMap((p) => (p.type === "text" ? [p.content] : [])),
+			);
+		}
+
+		// The point of resuming: a reconnect on a phone used to drop every page
+		// the user had scrolled back through. Resumed from the same server
+		// instance, the transcript keeps them and gains what it missed.
+		it("keeps the pages paged in when a reconnect resumes", async () => {
+			mockState.serverInstance = "instance-1";
+			const earlier = older();
+			const { calls } = subscribeThen(() => ({
+				delivery: "resume",
+				update: (({ type: _, ...u }) => u)(
+					update({ items: [text("while away")] }),
+				),
+			}));
+			mockState.chatMessagesHistory.mockResolvedValue(earlier);
+			const state = renderPager();
+			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
+			await act(async () => {
+				await state.loadMore();
+			});
+			const firstThrough = (
+				(await mockState.chatMessagesSubscribe.mock.results[0].value) as {
+					initial: { through_seq: number };
+				}
+			).initial.through_seq;
+
+			await state.reconnect();
+
+			await waitFor(() =>
+				expect(contents(state.messages)).toContain("while away"),
+			);
+			expect(contents(state.messages)).toEqual(
+				expect.arrayContaining(["Earlier question", "tail", "while away"]),
+			);
+			expect(calls()[0][2]).toBeUndefined();
+			expect(calls()[1][2]).toEqual({
+				server_instance: "instance-1",
+				after_seq: firstThrough,
+			});
+			// The pages paged in are still paged in: there is nothing older.
+			expect(state.hasMoreHistory).toBe(false);
+		});
+
+		// An older page asked for over the connection that dropped fails with
+		// it, before the resume answers. The cursor it was asked with is still
+		// good, so the failure must not be left stopping the next ask.
+		it("clears an older page's failure that the dropped connection caused, on a resume", async () => {
+			mockState.serverInstance = "instance-1";
+			subscribeThen(() => ({
+				delivery: "resume",
+				update: (({ type: _, ...u }) => u)(update({})),
+			}));
+			mockState.chatMessagesHistory.mockRejectedValueOnce(
+				new Error("Connection lost"),
+			);
+			const state = renderPager();
+			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
+			await act(async () => {
+				await state.loadMore();
+			});
+			expect(state.historyError).toContain("Connection lost");
+
+			await state.reconnect();
+
+			await waitFor(() => expect(state.historyError).toBeNull());
+			expect(state.hasMoreHistory).toBe(true);
+		});
+
+		// A send whose reply was lost with the connection may have been
+		// recorded meanwhile. The resume brings what the copy missed — that
+		// record among it — and the record takes the failed echo by its id,
+		// rather than leaving a failure under a message the agent has.
+		it("reconciles a send whose reply was lost, once a resume brings its record", async () => {
+			mockState.serverInstance = "instance-1";
+			subscribeWith(() => ({ ...page([turn({ ended: false }, msg("Go"))]) }), {
+				delivery: "snapshot",
+			});
+			mockState.sendMessage.mockRejectedValueOnce(
+				new JSONRPCErrorException("Connection lost", 0),
+			);
+			const state: {
+				messages: Message[];
+				send: ReturnType<typeof useChatMessages>["sendUserMessage"];
+			} = { messages: [], send: async () => false };
+			function ResumeProbe() {
+				const chat = useChatMessages({ sessionId: "s1" });
+				state.messages = chat.messages;
+				state.send = chat.sendUserMessage;
+				return null;
+			}
+			const { rerender } = render(<ResumeProbe />);
+			await waitFor(() => expect(state.messages.length).toBeGreaterThan(0));
+			const held = nextSeq() - 1;
+
+			await act(async () => {
+				await state.send("Hello there");
+			});
+			expect(
+				state.messages.some((m) => m.role === "assistant" && m.error),
+			).toBe(true);
+			const [, id] = mockState.sendMessage.mock.calls[0];
+
+			mockState.chatMessagesSubscribe.mockClear();
+			mockState.chatMessagesSubscribe.mockImplementation(async () => ({
+				id: "sub-2",
+				initial: {
+					turn: IDLE,
+					delivery: "resume",
+					update: (({ type: _, ...u }) => u)(
+						update({
+							items: [msg("Hello there", { message_id: id }), text("working")],
+						}),
+					),
+				},
+			}));
+			for (const status of ["reconnecting", "connected"]) {
+				mockState.status = status;
+				await act(async () => {
+					rerender(<ResumeProbe />);
+				});
+			}
+
+			await waitFor(() =>
+				expect(mockState.chatMessagesSubscribe).toHaveBeenCalled(),
+			);
+			// From what the copy holds: nothing of its own can be missing below it.
+			expect(mockState.chatMessagesSubscribe.mock.calls[0][2]).toEqual({
+				server_instance: "instance-1",
+				after_seq: held,
+			});
+			await waitFor(() =>
+				expect(
+					state.messages.filter(
+						(m) => m.role === "user" && m.content === "Hello there",
+					),
+				).toHaveLength(1),
+			);
+			expect(
+				state.messages.find(
+					(m) => m.role === "user" && m.content === "Hello there",
+				)?.id,
+			).toBe(id);
+			expect(
+				state.messages.some((m) => m.role === "assistant" && m.error),
+			).toBe(false);
+		});
+
+		// Another server instance, or a gap it will not answer as an update:
+		// the reply is a snapshot, and it replaces the copy, older pages and all.
+		it("starts over when a reconnect is answered with a snapshot", async () => {
+			mockState.serverInstance = "instance-1";
+			const earlier = older();
+			subscribeThen(() => ({
+				...page([turn({ continued: true }, text("fresh"))], {
+					has_more: true,
+					next_before_seq: 9,
+				}),
+				delivery: "snapshot",
+			}));
+			mockState.chatMessagesHistory.mockResolvedValue(earlier);
+			const state = renderPager();
+			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
+			await act(async () => {
+				await state.loadMore();
+			});
+			expect(contents(state.messages)).toContain("Earlier question");
+
+			mockState.serverInstance = "instance-2";
+			await state.reconnect();
+
+			await waitFor(() => expect(contents(state.messages)).toEqual(["fresh"]));
+			expect(state.hasMoreHistory).toBe(true);
+		});
+
+		// Nothing is resumed that was not read from a known instance: a server
+		// that predates server_instance gets the plain subscribe it always did.
+		it("asks for a page when the copy names no server instance", async () => {
+			const { calls } = subscribeThen(() => ({
+				...page([turn({}, text("fresh"))]),
+				delivery: "snapshot",
+			}));
+			const state = renderPager();
+			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
+			await state.reconnect();
+			await waitFor(() => expect(calls()).toHaveLength(2));
+			expect(calls()[1][2]).toBeUndefined();
 		});
 
 		it("asks for the page the server pointed at, and puts it in front", async () => {

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/pockode/server/internal/restart"
-	"github.com/pockode/server/internal/restarttest"
 	"log/slog"
 	"net/http/httptest"
 	"os"
@@ -18,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/attachments"
@@ -35,6 +34,8 @@ import (
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/internal/authsessiontest"
 	"github.com/pockode/server/internal/cloudlinktest"
+	"github.com/pockode/server/internal/restart"
+	"github.com/pockode/server/internal/restarttest"
 	"github.com/pockode/server/internal/unwritabletest"
 	"github.com/pockode/server/projection"
 	"github.com/pockode/server/rpc"
@@ -434,16 +435,16 @@ func (e *testEnv) createSession() (rpc.SessionListItem, session.SessionMeta) {
 	return row, meta
 }
 
-func (e *testEnv) sendMessage(sessionID, content string) rpc.MessageResult {
-	resp := e.call("chat.message", rpc.MessageParams{SessionID: sessionID, Content: content})
+// sendMessage sends content under an id minted here, as a client does, and
+// returns the id.
+func (e *testEnv) sendMessage(sessionID, content string) string {
+	e.t.Helper()
+	id := uuid.NewString()
+	resp := e.call("chat.message", rpc.MessageParams{SessionID: sessionID, MessageID: id, Content: content})
 	if resp.Error != nil {
 		e.t.Fatalf("message failed: %s", resp.Error.Message)
 	}
-	var result rpc.MessageResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		e.t.Fatalf("failed to unmarshal result: %v", err)
-	}
-	return result
+	return id
 }
 
 // awaitResponseComplete drains notifications until the agent has finished
@@ -498,12 +499,6 @@ func (e *testEnv) awaitResponseComplete() {
 		}
 		return false
 	})
-}
-
-func (e *testEnv) skipN(n int) {
-	for i := 0; i < n; i++ {
-		e.readFrame()
-	}
 }
 
 // startWorkWaiting starts a story, parks its work on the given wait and returns
@@ -1286,7 +1281,7 @@ func TestHandler_FailedFirstTurn_KeepsAgentTypeSwitchable(t *testing.T) {
 
 	env.subscribeChatMessages("failed-session")
 	env.sendMessage("failed-session", "hello")
-	env.skipN(4) // api_retry, warning, error, done
+	env.awaitResponseComplete()
 
 	sess, _, _ := store.Get("failed-session")
 	if sess.Activated {
@@ -1325,7 +1320,7 @@ func TestHandler_SessionWithAgentOutput_LocksAgentType(t *testing.T) {
 
 	env.subscribeChatMessages("started-session")
 	env.sendMessage("started-session", "hello")
-	env.skipN(2) // text, done
+	env.awaitResponseComplete()
 
 	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
 		SessionID: "started-session",
@@ -1993,7 +1988,7 @@ func TestHandler_ChatMessagesSubscribe_History(t *testing.T) {
 
 	result := env.subscribeChatMessages(sess.ID)
 
-	items := itemsOf(result.Page)
+	items := itemsOf(*result.Page)
 	if len(items) != 1 || items[0].Message == nil || items[0].Message.Content != "hello" {
 		t.Errorf("transcript = %+v, want the one message", items)
 	}

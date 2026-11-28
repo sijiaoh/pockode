@@ -13,9 +13,8 @@ import { formatPockodeCommand } from "./pockodeCommand";
  * Why fork cannot run on a message it otherwise applies to.
  *
  * - `no-anchor-seq`: the server never gave this message a seq, so it cannot be
- *   named as the cut point at all (see `Message.anchorSeq`). Rare now that the
- *   server tells a sender where its own message landed (`MessageResult`),
- *   leaving a server too old to answer with one and a record that could not be
+ *   named as the cut point at all (see `Message.anchorSeq`): a message this
+ *   client sent whose record has not arrived yet, or a record that could not be
  *   persisted — and that last one no reload can name, because the message does
  *   not survive it either.
  * - `pending-request`: the message holds a permission request nobody has

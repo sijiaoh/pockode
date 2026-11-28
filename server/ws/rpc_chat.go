@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/command"
@@ -44,8 +46,19 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		return
 	}
 
+	// The instance is this handler's to check, the gap the watcher's: a seq
+	// from another process names nothing here, whatever it happens to equal.
+	resumeAfter := session.NoHistorySeq
+	if r := params.Resume; r != nil {
+		if r.ServerInstance == h.instance {
+			resumeAfter = r.AfterSeq
+		} else {
+			log.Info("chat subscription asked to resume from another server instance; sending a fresh page")
+		}
+	}
+
 	notifier := h.state.getNotifier()
-	page, streams, err := wt.ChatMessagesWatcher.Subscribe(ctx, params.ID, notifier, params.SessionID, params.Limit)
+	start, err := wt.ChatMessagesWatcher.Subscribe(ctx, params.ID, notifier, params.SessionID, params.Limit, resumeAfter)
 	if err != nil {
 		// An unusable subscription id or a limit the client cannot ask for are its
 		// mistakes; anything else Subscribe fails on is a history the server could
@@ -66,22 +79,34 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 
 	now := time.Now()
 	result := rpc.ChatMessagesSubscribeResult{
-		Page: page,
+		Delivery: rpc.ChatDeliverySnapshot,
+		Page:     start.Page,
+		Update:   start.Resumed,
 		// From the store, not from the process manager: the turn is what the
 		// session is doing, and it is recorded whether or not a process is still
 		// there to be asked.
 		Turn:       rpc.NewTurn(meta.Turn, now),
-		Streams:    streams,
+		Streams:    start.Streams,
 		ServerTime: now,
+	}
+	if start.Resumed != nil {
+		result.Delivery = rpc.ChatDeliveryResume
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)
 		return
 	}
 
+	if start.Resumed != nil {
+		log.Info("resumed chat messages subscription",
+			"subscriptionId", params.ID, "phase", result.Turn.Phase,
+			"afterSeq", resumeAfter, "throughSeq", start.Resumed.ThroughSeq,
+			"turns", len(start.Resumed.Turns), "items", len(start.Resumed.Items))
+		return
+	}
 	log.Info("subscribed to chat messages",
 		"subscriptionId", params.ID, "phase", result.Turn.Phase,
-		"turns", len(page.Turns), "hasMore", page.HasMore)
+		"turns", len(start.Page.Turns), "hasMore", start.Page.HasMore)
 }
 
 // handleChatMessagesHistory serves the page of the transcript older than a
@@ -167,6 +192,11 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 		return
 	}
 
+	if err := checkMessageID(params.MessageID); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+		return
+	}
+
 	// Resolved before anything is sent, like a command below, so a message
 	// naming a file the session does not have leaves no trace.
 	var attached []agent.Attachment
@@ -228,15 +258,20 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 	var sent chat.Sent
 	var err error
 	if isCommand {
-		sent, err = wt.ChatClient.SendCommandExcluding(ctx, params.SessionID, content, cmd, attached, h.state.getNotifier())
+		sent, err = wt.ChatClient.SendCommand(ctx, params.SessionID, content, cmd, attached, params.MessageID)
 	} else if len(params.Answering) > 0 {
-		sent, content, err = wt.ChatClient.SendAnswers(ctx, params.SessionID,
-			chatAnswers(params.Answering), h.state.getNotifier())
+		sent, err = wt.ChatClient.SendAnswers(ctx, params.SessionID, chatAnswers(params.Answering), params.MessageID)
 	} else {
-		sent, err = wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, content, attached, h.state.getNotifier())
+		sent, err = wt.ChatClient.SendMessage(ctx, params.SessionID, content, attached, params.MessageID)
 	}
 	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
+		return
+	}
+	// A retry of a send already recorded and delivered: the attempt that did
+	// so set off everything below, and the reply is all that is left to give.
+	if sent.Retried {
+		h.replyMessageSent(ctx, conn, req, log)
 		return
 	}
 
@@ -262,20 +297,29 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 		h.workEngine.HandleUserMessage(params.SessionID)
 	}
 
-	// This connection is the one excluded from the broadcast, so the reply is
-	// where it learns its own message's seq and id (see rpc.MessageResult).
-	result := messageResult(sent)
-	if isCommand {
-		result.Content, result.Command = content, &cmd
-	} else if len(params.Answering) > 0 {
-		result.Content = content
-	}
-	for _, a := range attached {
-		result.Attachments = append(result.Attachments, a.File)
-	}
-	if err := conn.Reply(ctx, req.ID, result); err != nil {
+	h.replyMessageSent(ctx, conn, req, log)
+}
+
+// replyMessageSent answers a send that went through. The reply says nothing
+// else: the message's record reaches the sender on its subscription like any
+// other, under the id it minted.
+func (h *rpcMethodHandler) replyMessageSent(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, log *slog.Logger) {
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		log.Error("failed to send response", "error", err)
 	}
+}
+
+// checkMessageID refuses a message id that is not one a client mints: a UUID
+// in its canonical form. Canonical, so that the one message has one spelling
+// in every record that names it. Empty is allowed — the server mints one.
+func checkMessageID(id string) error {
+	if id == "" {
+		return nil
+	}
+	if parsed, err := uuid.Parse(id); err != nil || parsed.String() != id {
+		return fmt.Errorf("message_id must be a UUID in canonical form (lowercase and hyphenated), not %q", id)
+	}
+	return nil
 }
 
 // The bounds of chat.html_action (docs/tool-call-ui.md § The action message),
@@ -352,6 +396,10 @@ func (h *rpcMethodHandler) handleHTMLAction(ctx context.Context, conn *jsonrpc2.
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 		return
 	}
+	if err := checkMessageID(params.MessageID); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+		return
+	}
 
 	if _, err := htmlpage.Get(wt.DataDir, params.SessionID, action.Page); errors.Is(err, htmlpage.ErrNotFound) {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams,
@@ -364,7 +412,7 @@ func (h *rpcMethodHandler) handleHTMLAction(ctx context.Context, conn *jsonrpc2.
 
 	log.Info("received page action", "page", action.Page, "dataBytes", len(action.Data))
 
-	sent, content, err := wt.ChatClient.SendHTMLActionExcluding(ctx, params.SessionID, action, h.state.getNotifier())
+	sent, err := wt.ChatClient.SendHTMLAction(ctx, params.SessionID, action, params.MessageID)
 	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
@@ -372,23 +420,10 @@ func (h *rpcMethodHandler) handleHTMLAction(ctx context.Context, conn *jsonrpc2.
 
 	// After the send; see handleMessage. A press is the reader speaking to the
 	// work as much as typing is.
-	h.workEngine.HandleUserMessage(params.SessionID)
-
-	result := messageResult(sent)
-	result.Content, result.HTMLAction = content, &action
-	if err := conn.Reply(ctx, req.ID, result); err != nil {
-		log.Error("failed to send response", "error", err)
+	if !sent.Retried {
+		h.workEngine.HandleUserMessage(params.SessionID)
 	}
-}
-
-// messageResult is the part of a send's answer every kind of send shares:
-// what names the record the message was written to.
-func messageResult(sent chat.Sent) rpc.MessageResult {
-	result := rpc.MessageResult{Seq: sent.Seq, MessageID: sent.MessageID, ItemID: sent.ItemID}
-	if !sent.ObservedAt.IsZero() {
-		result.ObservedAt = &sent.ObservedAt
-	}
-	return result
+	h.replyMessageSent(ctx, conn, req, log)
 }
 
 // chatAnswers narrows the wire shape of an answer to the one the chat client
@@ -492,7 +527,8 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 		errors.Is(err, chat.ErrForkAnchorOutOfRange) ||
 		errors.Is(err, chat.ErrForkAnchorNoHistory) ||
 		errors.Is(err, chat.ErrForkUnsupported) ||
-		errors.Is(err, chat.ErrAttachmentsUnsupported) {
+		errors.Is(err, chat.ErrAttachmentsUnsupported) ||
+		errors.Is(err, chat.ErrRecordedNotDelivered) {
 		// The request does not fit the session's history, state or agent — a prompt
 		// whose process is gone or which is no longer being waited on, a message
 		// answering a question somebody already resolved (the text names every
@@ -500,7 +536,7 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 		// those answers out and keep the rest of the draft), a fork anchored past
 		// the end of the history or at the very first message, a fork of a
 		// session whose agent cannot be forked, files for an agent that cannot
-		// receive them.
+		// receive them, a retry of a message recorded but never delivered.
 		// The message names what was wrong, and none of them is a server fault.
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {

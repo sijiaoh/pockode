@@ -17,7 +17,6 @@ type enqueued struct {
 	sessionID string
 	record    agent.Wire
 	seq       session.HistorySeq
-	exclude   any
 }
 
 type recordingSink struct {
@@ -25,9 +24,9 @@ type recordingSink struct {
 	entries []enqueued
 }
 
-func (r *recordingSink) Enqueue(sessionID string, record agent.Wire, seq session.HistorySeq, exclude any) {
+func (r *recordingSink) Enqueue(sessionID string, record agent.Wire, seq session.HistorySeq) {
 	r.mu.Lock()
-	r.entries = append(r.entries, enqueued{sessionID, record, seq, exclude})
+	r.entries = append(r.entries, enqueued{sessionID, record, seq})
 	r.mu.Unlock()
 }
 
@@ -76,7 +75,7 @@ func TestSequencer_EnqueuesEverySessionsRecordsInSeqOrder(t *testing.T) {
 						seq.Publish(sessionID, agent.ToolActivityEvent{ToolUseID: "call", Activity: fmt.Sprint(i)}.Encode().(agent.LiveEvent))
 					}
 					record := agent.TextEvent{Content: fmt.Sprintf("%d/%d", w, i)}.ToRecord()
-					if _, err := seq.Append(context.Background(), sessionID, record, nil); err != nil {
+					if _, err := seq.Append(context.Background(), sessionID, record); err != nil {
 						t.Errorf("Append: %v", err)
 						return
 					}
@@ -125,23 +124,6 @@ func (s slowAfterAppend) AppendToHistory(ctx context.Context, sessionID string, 
 	return seq, err
 }
 
-func TestSequencer_PassesTheSenderOnToBeLeftOut(t *testing.T) {
-	store := newStore(t, "sess")
-	sink := &recordingSink{}
-	seq := New(store)
-	seq.SetSink(sink)
-
-	sender := new(int)
-	got, err := seq.Append(context.Background(), "sess", agent.MessageEvent{Content: "hi"}.ToRecord(), sender)
-	if err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	entries := sink.snapshot()
-	if len(entries) != 1 || entries[0].seq != got || entries[0].exclude != sender {
-		t.Fatalf("enqueued %+v, want the record under seq %d with the sender to leave out", entries, got)
-	}
-}
-
 // failingStore refuses every write; ApplyTurn and Get come from the embedded
 // nil interface and are not reached by the tests that use it.
 type failingStore struct {
@@ -168,7 +150,7 @@ func TestSequencer_AFailedWriteIsReportedNotBroadcast(t *testing.T) {
 	seq := New(failingStore{err: writeErr})
 	seq.SetSink(sink)
 
-	got, err := seq.Append(context.Background(), "sess", agent.DoneEvent{}.ToRecord(), new(int))
+	got, err := seq.Append(context.Background(), "sess", agent.DoneEvent{}.ToRecord())
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("Append error = %v, want %v", err, writeErr)
 	}
@@ -187,9 +169,6 @@ func TestSequencer_AFailedWriteIsReportedNotBroadcast(t *testing.T) {
 	if entries[0].seq.Valid() {
 		t.Errorf("warning seq = %d, want none: the warning is not in history either", entries[0].seq)
 	}
-	if entries[0].exclude != nil {
-		t.Errorf("warning leaves out %v, want every subscriber told", entries[0].exclude)
-	}
 }
 
 // Output still arriving for a session deleted under it is ordinary, and there
@@ -199,7 +178,7 @@ func TestSequencer_AGoneSessionIsNotWarnedAbout(t *testing.T) {
 	seq := New(failingStore{err: fmt.Errorf("append: %w", session.ErrSessionNotFound)})
 	seq.SetSink(sink)
 
-	if _, err := seq.Append(context.Background(), "sess", agent.DoneEvent{}.ToRecord(), nil); !errors.Is(err, session.ErrSessionNotFound) {
+	if _, err := seq.Append(context.Background(), "sess", agent.DoneEvent{}.ToRecord()); !errors.Is(err, session.ErrSessionNotFound) {
 		t.Fatalf("Append error = %v, want ErrSessionNotFound", err)
 	}
 	if entries := sink.snapshot(); len(entries) != 0 {
@@ -217,7 +196,7 @@ func TestSequencer_ACancelledCallerStillHasItsRecordWritten(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	got, err := seq.Append(ctx, "sess", agent.MessageEvent{Content: "hi"}.ToRecord(), nil)
+	got, err := seq.Append(ctx, "sess", agent.MessageEvent{Content: "hi"}.ToRecord())
 	if err != nil || !got.Valid() {
 		t.Fatalf("Append = %d, %v; want the record written", got, err)
 	}
@@ -266,7 +245,7 @@ func TestSequencer_TagsEachRecordWithItsTurn(t *testing.T) {
 	ctx := context.Background()
 
 	message := agent.MessageEvent{Content: "go", MessageID: "m1"}.ToRecord()
-	if _, err := s.Append(ctx, "sess", message, nil); err != nil {
+	if _, err := s.Append(ctx, "sess", message); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	opened := advance(t, s, session.TurnInput{Signal: session.SignalPrompt, MessageID: "m1"}, nil)
@@ -275,13 +254,13 @@ func TestSequencer_TagsEachRecordWithItsTurn(t *testing.T) {
 	}
 	turn := opened.Turn
 	advance(t, s, session.TurnInput{Signal: session.SignalOutput}, agent.TextEvent{Content: "on it"}.ToRecord())
-	if _, err := s.Append(ctx, "sess", agent.MessageIngestedEvent{MessageID: "m1"}.ToRecord(), nil); err != nil {
+	if _, err := s.Append(ctx, "sess", agent.MessageIngestedEvent{MessageID: "m1"}.ToRecord()); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	advance(t, s, session.TurnInput{Signal: session.SignalInterrupted}, agent.InterruptedEvent{}.ToRecord())
 	// Claude's second interrupted for the same Stop.
 	advance(t, s, session.TurnInput{Signal: session.SignalInterrupted}, agent.InterruptedEvent{}.ToRecord())
-	if _, err := s.Append(ctx, "sess", agent.WarningEvent{Message: "after"}.ToRecord(), nil); err != nil {
+	if _, err := s.Append(ctx, "sess", agent.WarningEvent{Message: "after"}.ToRecord()); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 

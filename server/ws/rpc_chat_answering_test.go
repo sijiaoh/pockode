@@ -2,7 +2,6 @@ package ws
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -60,17 +59,12 @@ func TestHandler_MessageAnsweringResolvesTheQuestions(t *testing.T) {
 	if got := unanswered(t, env, row.ID); len(got) != 0 {
 		t.Errorf("unanswered = %+v, want both resolved", got)
 	}
-	// The sender is left out of the broadcast, so the reply is how it learns
-	// the body the server wrote — its echo has nothing else to go on.
-	var result rpc.MessageResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("unmarshal result: %v", err)
+	records := messageRecords(t, env, row.ID)
+	if len(records) != 1 {
+		t.Fatalf("message records = %+v, want one", records)
 	}
-	if !strings.HasPrefix(result.Content, "Answering:") || !strings.Contains(result.Content, "note: ask the ops team") {
-		t.Errorf("result content = %q, want the body the server wrote", result.Content)
-	}
-	if result.Command != nil {
-		t.Errorf("result command = %+v, want none for an answer", result.Command)
+	if rec := records[0]; !strings.HasPrefix(rec.Content, "Answering:") || !strings.Contains(rec.Content, "note: ask the ops team") || rec.Command != nil {
+		t.Errorf("record = %+v, want the body the server wrote and no command", rec)
 	}
 }
 

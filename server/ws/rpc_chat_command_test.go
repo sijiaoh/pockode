@@ -43,28 +43,24 @@ func TestHandler_MessagePockodeCommandIsExpanded(t *testing.T) {
 	env := newBranchTestEnv(t, mock, "feature/x")
 	row, _ := env.createSession()
 
-	result := env.sendMessage(row.ID, "/pockode-lead  API first")
-
-	want := agent.CommandInvocation{Name: "pockode-lead", Args: "API first"}
-	if result.Command == nil || *result.Command != want {
-		t.Errorf("reply command = %+v, want %+v", result.Command, want)
-	}
-	if !strings.Contains(result.Content, "merge its branch into feature/x") ||
-		!strings.HasSuffix(result.Content, "Additional instructions from the user:\nAPI first") {
-		t.Errorf("reply content is not the expanded prompt:\n%s", result.Content)
-	}
-
-	if sent := mock.sentMessagesFor(row.ID); len(sent) != 1 || sent[0] != result.Content {
-		t.Errorf("agent was sent %q, want the expanded prompt", sent)
-	}
+	env.sendMessage(row.ID, "/pockode-lead  API first")
 
 	records := messageRecords(t, env, row.ID)
 	if len(records) != 1 {
 		t.Fatalf("message records = %+v, want one", records)
 	}
 	rec := records[0]
-	if rec.Content != result.Content || rec.Command == nil || *rec.Command != want {
-		t.Errorf("record = content %q, command %+v; want the reply's", rec.Content, rec.Command)
+	want := agent.CommandInvocation{Name: "pockode-lead", Args: "API first"}
+	if rec.Command == nil || *rec.Command != want {
+		t.Errorf("record command = %+v, want %+v", rec.Command, want)
+	}
+	if !strings.Contains(rec.Content, "merge its branch into feature/x") ||
+		!strings.HasSuffix(rec.Content, "Additional instructions from the user:\nAPI first") {
+		t.Errorf("record content is not the expanded prompt:\n%s", rec.Content)
+	}
+
+	if sent := mock.sentMessagesFor(row.ID); len(sent) != 1 || sent[0] != rec.Content {
+		t.Errorf("agent was sent %q, want the expanded prompt", sent)
 	}
 	if rec.Origin != "" {
 		t.Errorf("record origin = %q, want the user's", rec.Origin)
@@ -92,16 +88,16 @@ func TestHandler_MessageSlashCommandUnrecordedWhenSendFails(t *testing.T) {
 	}
 }
 
-// An ordinary message carries neither, so a client can tell the two apart by
-// their presence.
+// A slash that names no Pockode command is an ordinary message, recorded as
+// typed and with no command.
 func TestHandler_MessageOrdinaryHasNoCommand(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	row, _ := env.createSession()
 
-	result := env.sendMessage(row.ID, "/review")
+	env.sendMessage(row.ID, "/review")
 
-	if result.Command != nil || result.Content != "" {
-		t.Errorf("reply = %+v, want only a seq", result)
+	if records := messageRecords(t, env, row.ID); len(records) != 1 || records[0].Command != nil || records[0].Content != "/review" {
+		t.Errorf("message records = %+v, want the message as typed", records)
 	}
 }
 

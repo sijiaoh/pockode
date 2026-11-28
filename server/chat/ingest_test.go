@@ -65,9 +65,9 @@ func TestClient_MidTurnMessageRecordsTheReadPoint(t *testing.T) {
 	f := newMidTurnFixture(t)
 	sess := f.startTurn(t)
 
-	reply, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil)
+	reply, err := f.client.SendMessage(context.Background(), "sess", "second", nil, "")
 	if err != nil {
-		t.Fatalf("SendMessageExcluding: %v", err)
+		t.Fatalf("SendMessage: %v", err)
 	}
 
 	records := f.records(t)
@@ -134,8 +134,8 @@ func TestClient_MessageBetweenTurnsRecordsNoReadPoint(t *testing.T) {
 	sess.events <- agent.DoneEvent{}
 	f.waitForPhase(t, session.PhaseIdle)
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
-		t.Fatalf("SendMessageExcluding: %v", err)
+	if _, err := f.client.SendMessage(context.Background(), "sess", "second", nil, ""); err != nil {
+		t.Fatalf("SendMessage: %v", err)
 	}
 
 	for _, rec := range f.records(t) {
@@ -154,8 +154,8 @@ func TestClient_EachQueuedMessageGetsItsOwnReadPoint(t *testing.T) {
 	f.startTurn(t)
 
 	for _, text := range []string{"second", "third"} {
-		if _, err := f.client.SendMessageExcluding(context.Background(), "sess", text, nil, nil); err != nil {
-			t.Fatalf("SendMessageExcluding(%q): %v", text, err)
+		if _, err := f.client.SendMessage(context.Background(), "sess", text, nil, ""); err != nil {
+			t.Fatalf("SendMessage(%q): %v", text, err)
 		}
 	}
 
@@ -208,8 +208,8 @@ func TestClient_NoReadPointForAMessageThatWasNotRecorded(t *testing.T) {
 
 	client := NewClient(store, projection.FromReader(store), pm)
 	for _, text := range []string{"first", "second"} {
-		if _, err := client.SendMessageExcluding(context.Background(), "sess", text, nil, nil); err != nil {
-			t.Fatalf("SendMessageExcluding(%q) = %v, want the prompt to go through anyway", text, err)
+		if _, err := client.SendMessage(context.Background(), "sess", text, nil, ""); err != nil {
+			t.Fatalf("SendMessage(%q) = %v, want the prompt to go through anyway", text, err)
 		}
 	}
 
@@ -226,8 +226,8 @@ func TestClient_ReadPointLeftToAnAgentThatReportsItsOwn(t *testing.T) {
 	f.agent.reportsIngest = true
 	f.startTurn(t)
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
-		t.Fatalf("SendMessageExcluding: %v", err)
+	if _, err := f.client.SendMessage(context.Background(), "sess", "second", nil, ""); err != nil {
+		t.Fatalf("SendMessage: %v", err)
 	}
 
 	records := f.records(t)
@@ -239,14 +239,12 @@ func TestClient_ReadPointLeftToAnAgentThatReportsItsOwn(t *testing.T) {
 // A reply's span is measured between moments its records carry, so the record
 // of a message that opens a turn has to carry the very instant the turn opened
 // at: the tail line's clock counts from TurnState.OpenedAt, and the settled
-// figure from the record, and the two must start together. The sender, left
-// out of the record's broadcast, is told the same instant in its answer.
+// figure from the record, and the two must start together.
 func TestClient_MessageThatOpensATurnCarriesTheTurnsOpeningMoment(t *testing.T) {
 	f := newMidTurnFixture(t)
 
-	sent, err := f.client.SendMessageExcluding(context.Background(), "sess", "first", nil, nil)
-	if err != nil {
-		t.Fatalf("SendMessageExcluding: %v", err)
+	if _, err := f.client.SendMessage(context.Background(), "sess", "first", nil, ""); err != nil {
+		t.Fatalf("SendMessage: %v", err)
 	}
 
 	records := f.records(t)
@@ -261,9 +259,6 @@ func TestClient_MessageThatOpensATurnCarriesTheTurnsOpeningMoment(t *testing.T) 
 	if opened := f.pm.GetProcess("sess").TurnState().OpenedAt; !opened.Equal(at) {
 		t.Errorf("turn opened at %v, record says %v", opened, at)
 	}
-	if !sent.ObservedAt.Equal(at) {
-		t.Errorf("sender told %v, record says %v", sent.ObservedAt, at)
-	}
 	if started := recordAs[agent.TurnStartedRecord](t, records[1]); started.ObservedAt == nil || !started.ObservedAt.Equal(at) {
 		t.Errorf("turn_started observed at %v, message record says %v", started.ObservedAt, at)
 	}
@@ -276,8 +271,8 @@ func TestClient_ReadPointCarriesItsMoment(t *testing.T) {
 	f.startTurn(t)
 
 	before := time.Now()
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
-		t.Fatalf("SendMessageExcluding: %v", err)
+	if _, err := f.client.SendMessage(context.Background(), "sess", "second", nil, ""); err != nil {
+		t.Fatalf("SendMessage: %v", err)
 	}
 	after := time.Now()
 

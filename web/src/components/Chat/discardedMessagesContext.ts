@@ -8,8 +8,8 @@ const EMPTY: Discarded = new Map();
 
 interface DiscardedMessages {
 	/**
-	 * Every message a Stop threw away, by server id, mapped to the message where
-	 * it is loaded (`discardedMessages`).
+	 * Every message a Stop threw away, by id, mapped to the message where it is
+	 * loaded (`discardedMessages`).
 	 */
 	discarded: Discarded;
 	/** Whether a message not loaded may yet arrive with an older page. */

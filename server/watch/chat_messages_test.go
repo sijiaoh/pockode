@@ -125,11 +125,6 @@ func newChatEnvWrapping(t *testing.T, wrap func(ChatProjections) ChatProjections
 // turn.
 func (e *chatEnv) write(turn string, record agent.Record) session.HistorySeq {
 	e.t.Helper()
-	return e.writeExcluding(turn, record, nil)
-}
-
-func (e *chatEnv) writeExcluding(turn string, record agent.Record, exclude any) session.HistorySeq {
-	e.t.Helper()
 	tag := session.NoTurn
 	if turn != "" {
 		tag = session.InTurn(turn)
@@ -138,21 +133,34 @@ func (e *chatEnv) writeExcluding(turn string, record agent.Record, exclude any) 
 	if err != nil {
 		e.t.Fatalf("append: %v", err)
 	}
-	e.w.Enqueue("sess", record, seq, exclude)
+	e.w.Enqueue("sess", record, seq)
 	return seq
 }
 
 func (e *chatEnv) live(event agent.LiveEvent) {
-	e.w.Enqueue("sess", event, session.NoHistorySeq, nil)
+	e.w.Enqueue("sess", event, session.NoHistorySeq)
 }
 
 func (e *chatEnv) subscribe(id string, n Notifier) (projection.Page, rpc.ChatStreams) {
 	e.t.Helper()
-	page, streams, err := e.w.Subscribe(context.Background(), id, n, "sess", 0)
+	start, err := e.w.Subscribe(context.Background(), id, n, "sess", 0, session.NoHistorySeq)
 	if err != nil {
 		e.t.Fatalf("subscribe %s: %v", id, err)
 	}
-	return page, streams
+	if start.Page == nil {
+		e.t.Fatalf("subscribe %s: no page", id)
+	}
+	return *start.Page, start.Streams
+}
+
+// resume subscribes asking to continue from after.
+func (e *chatEnv) resume(id string, n Notifier, after session.HistorySeq) ChatStart {
+	e.t.Helper()
+	start, err := e.w.Subscribe(context.Background(), id, n, "sess", 0, after)
+	if err != nil {
+		e.t.Fatalf("resume %s: %v", id, err)
+	}
+	return start
 }
 
 // writeTexts writes count texts in turn T1.
@@ -377,37 +385,6 @@ func TestChatMessagesWatcher_UpdatesCarryWhatEachRecordChanged(t *testing.T) {
 	}
 }
 
-// The sender of a message, which drew it itself, is sent the update without
-// it; everything else the record changed still reaches it.
-func TestChatMessagesWatcher_TheSenderIsLeftOutOfItsOwnMessage(t *testing.T) {
-	e := newChatEnv(t)
-	sender, other := newGatedNotifier(true), newGatedNotifier(true)
-	e.subscribe("sender", sender)
-	e.subscribe("other", other)
-
-	e.write("T1", agent.TurnStartedRecord{TurnID: "T1", Origin: agent.TurnOriginOutput})
-	e.write("T1", agent.QuestionPostedRecord{RequestID: "q1", Questions: []agent.AskUserQuestion{{Question: "Which?"}}})
-	e.write("T1", agent.DoneRecord{})
-	e.writeExcluding("", agent.MessageRecord{MessageID: "m1", Content: "this one",
-		Answering: []agent.QuestionAnswer{{RequestID: "q1", Answers: []string{"a"}}}}, sender)
-
-	toOther := updateOf(t, other.waitUntil(t, atLeast(4))[3])
-	toSender := updateOf(t, sender.waitUntil(t, atLeast(4))[3])
-	kinds := func(u updateParams) []projection.ItemKind {
-		var out []projection.ItemKind
-		for _, it := range u.Items {
-			out = append(out, it.Item.Kind)
-		}
-		return out
-	}
-	if got := kinds(toOther); !reflect.DeepEqual(got, []projection.ItemKind{projection.KindQuestion, projection.KindMessage}) {
-		t.Errorf("the other subscriber got %v, want the answered question and the message", got)
-	}
-	if got := kinds(toSender); !reflect.DeepEqual(got, []projection.ItemKind{projection.KindQuestion}) {
-		t.Errorf("the sender got %v, want only the answered question", got)
-	}
-}
-
 // A subscriber arriving mid-stream starts from the stream as it stands, is
 // sent every delta after and none before, and is told when the item that
 // records the stream ends it.
@@ -523,13 +500,82 @@ func TestChatMessagesWatcher_AReconnectingClientPicksUpWhereThingsStand(t *testi
 	}
 }
 
+// A client that reconnects holding the transcript through some seq asks to
+// resume from it, and is sent what changed while it was away rather than a
+// page: the items the records it missed changed, the streams as they stand,
+// and from there the updates that follow.
+func TestChatMessagesWatcher_AResumingClientIsSentWhatItMissed(t *testing.T) {
+	e := newChatEnv(t)
+	e.write("T1", agent.TurnStartedRecord{TurnID: "T1", Origin: agent.TurnOriginOutput})
+	held := e.write("T1", agent.TextRecord{Content: "seen"})
+	e.subscribe("first", newGatedNotifier(true))
+	e.w.Unsubscribe("first")
+
+	callSeq := e.write("T1", agent.ToolCallRecord{ToolUseID: "bash", ToolName: "Bash"})
+	e.live(agent.ToolActivityLiveEvent{ToolUseID: "bash", OutputDelta: "partial"})
+	missed := e.write("T1", agent.TextRecord{Content: "while away"})
+
+	n := newGatedNotifier(true)
+	start := e.resume("again", n, held)
+	if start.Page != nil || start.Resumed == nil {
+		t.Fatalf("start = %+v, want an update and no page", start)
+	}
+	if start.Resumed.ThroughSeq != missed {
+		t.Errorf("resumed through %d, want the last record written while away, %d", start.Resumed.ThroughSeq, missed)
+	}
+	var seqs []session.HistorySeq
+	for _, it := range start.Resumed.Items {
+		seqs = append(seqs, it.Item.Seq)
+	}
+	if !reflect.DeepEqual(seqs, []session.HistorySeq{callSeq, missed}) {
+		t.Errorf("resumed items at seqs %v, want only the two written while away, %v", seqs, []session.HistorySeq{callSeq, missed})
+	}
+	if got := start.Streams.Tools["bash"].Output; got != "partial" {
+		t.Errorf("the call's output = %q, want what it streamed while away", got)
+	}
+	next := e.write("T1", agent.DoneRecord{})
+	if u := updateOf(t, n.waitUntil(t, atLeast(1))[0]); u.ThroughSeq != next {
+		t.Errorf("first update after resuming is through %d, want %d", u.ThroughSeq, next)
+	}
+}
+
+// What cannot be resumed from is answered with a page, never refused: a seq
+// past the history is not this history's, and one far enough behind is
+// cheaper to start over from.
+func TestChatMessagesWatcher_WhatCannotBeResumedGetsAPage(t *testing.T) {
+	e := newChatEnv(t)
+	first := e.write("", agent.TextRecord{Content: "x"})
+	e.writeTexts(projection.MaxResumeGap + 1)
+	newest := first + projection.MaxResumeGap + 1
+
+	for _, tc := range []struct {
+		name  string
+		after session.HistorySeq
+	}{
+		{"past the history", newest + 1},
+		{"too far behind", newest - projection.MaxResumeGap - 1},
+	} {
+		if !tc.after.Valid() {
+			t.Fatalf("%s: seq %d is no seq; the history is too short for the case", tc.name, tc.after)
+		}
+		start := e.resume(tc.name, newGatedNotifier(true), tc.after)
+		if start.Resumed != nil || start.Page == nil {
+			t.Errorf("%s: start = %+v, want a page", tc.name, start)
+			continue
+		}
+		if start.Page.ThroughSeq != newest {
+			t.Errorf("%s: page through %d, want %d", tc.name, start.Page.ThroughSeq, newest)
+		}
+	}
+}
+
 // A warning standing in for a record that could not be written is in no
 // history: it goes out as an item nothing will update.
 func TestChatMessagesWatcher_AnUnwrittenRecordsWarningIsAnItemOfItsOwn(t *testing.T) {
 	e := newChatEnv(t)
 	n := newGatedNotifier(true)
 	e.subscribe("sub", n)
-	e.w.Enqueue("sess", agent.WarningRecord{Message: "not saved", Code: "history_write_failed"}, session.NoHistorySeq, nil)
+	e.w.Enqueue("sess", agent.WarningRecord{Message: "not saved", Code: "history_write_failed"}, session.NoHistorySeq)
 
 	u := updateOf(t, n.waitUntil(t, atLeast(1))[0])
 	if len(u.Items) != 1 || u.Items[0].Item.ID != 0 || u.Items[0].Item.Seq.Valid() || u.Items[0].Item.Warning.Code != "history_write_failed" {

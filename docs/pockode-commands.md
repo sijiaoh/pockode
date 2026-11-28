@@ -73,11 +73,9 @@ template when needed, because the template may have changed since. The record
 says what the agent was sent then, not what the command would expand to now
 (AGENTS.md, *Events are events, state is state*).
 
-The sender is left out of the broadcast, so it learns both fields from the reply
-to its own `chat.message` call: `rpc.MessageResult` carries `content` and
-`command` beside `seq`; `command` only for a command message, `content` also for
-a message carrying answers
-([code/websocket-rpc.md](code/websocket-rpc.md#growing-a-reply)).
+The sender draws the command as typed until its own record arrives, on its
+subscription like every other tab's, and brings both fields
+([agent-event.md](agent-event.md#broadcasting)).
 
 ## How it is drawn
 
@@ -101,12 +99,13 @@ message-action slot and its `…` like every user row, an agent's answer include
 
 **The local echo is the line from the first frame.** `sendUserMessage` parses
 the text with `parsePockodeCommand`. When the text is a command, the echo
-carries `command`, and its `content` stays empty until the reply arrives. The
-reply then writes the server's `content` and `command` over the echo, together
-with `seq`, in a single state update. The server's parse wins over the
-client's. The client parses only so that the echo is not first drawn as a bubble
-and then redrawn as a line. Until the reply comes, and permanently if the send
-fails without one, the expanded body says *Not received from the server.*
+carries `command`, and its `content` stays empty until the message's record
+arrives. The sender is sent that record like every other subscriber, and the
+item it becomes takes the echo's place, bringing the server's `content` and
+`command` in one state update. The server's parse wins over the client's. The
+client parses only so that the echo is not first drawn as a bubble and then
+redrawn as a line. Until the record comes, and permanently if the send fails
+without one, the expanded body says *Not received from the server.*
 
 What goes back when the user reuses the message is what they typed, never the
 expanded prompt:
@@ -291,8 +290,8 @@ The prefix is defined once on each side — `PockodePrefix` in
 | Registry, parsing, expansion | `server/command/pockode.go` |
 | Palette order and recording | `server/command/store.go`, `server/ws/rpc_chat.go` (`recordCommandIfSlash`) |
 | Catching, refusing, replying | `server/ws/rpc_chat.go` (`handleMessage`) |
-| Sending with the record field | `server/chat/client.go` (`SendCommandExcluding`) |
-| Record and reply fields | `server/agent/event.go` (`CommandInvocation`), `server/rpc/types.go` (`MessageResult`) |
+| Sending with the record field | `server/chat/client.go` (`SendCommand`) |
+| Record fields | `server/agent/event.go` (`CommandInvocation`) |
 | Branch reading | `server/git/branch.go` (`CurrentBranch`) |
 | Template | `server/work/prompts.yaml` (`pockode_lead_command`), `server/work/prompt.go` |
 | Client prefix and parsing | `web/src/utils/pockodeCommand.ts` |

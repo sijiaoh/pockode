@@ -34,10 +34,6 @@ const TEST_SESSION_TOKEN = "test-session-token";
 // an implementation detail everywhere except here.
 const RECONNECT_MAX_DELAY = 30000;
 
-// What the server answers `chat.message` with. Defaults to the empty object a
-// server too old to hand back a seq sends.
-let chatMessageResult: Record<string, unknown> = {};
-
 // Track created WebSocket instances
 let mockWsInstances: MockWebSocket[] = [];
 let currentMockWs: MockWebSocket | null = null;
@@ -86,8 +82,6 @@ class MockWebSocket {
 						history: [],
 						turn: { phase: "idle", open: false, since: "" },
 					};
-				} else if (parsed.method === "chat.message") {
-					result = chatMessageResult;
 				}
 				this.simulateMessage({
 					jsonrpc: "2.0",
@@ -189,7 +183,6 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	mockWsInstances = [];
 	currentMockWs = null;
-	chatMessageResult = {};
 	globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 });
 
@@ -656,7 +649,7 @@ describe("wsStore", () => {
 			await connectAndAuth();
 			getMockWs()?.send.mockClear();
 
-			await wsActions.sendMessage("test-session", "hello");
+			await wsActions.sendMessage("test-session", "m-1", "hello");
 
 			expect(getMockWs()?.send).toHaveBeenCalled();
 			const ws = getMockWs();
@@ -664,59 +657,15 @@ describe("wsStore", () => {
 			expect(sentData.method).toBe("chat.message");
 			expect(sentData.params).toEqual({
 				session_id: "test-session",
+				message_id: "m-1",
 				content: "hello",
 			});
 		});
 
-		// The seq of the sender's own message reaches it here and nowhere else:
-		// the broadcast carrying every other record's address skips the sender.
-		it("sendMessage returns the seq the server replies with", async () => {
-			chatMessageResult = { seq: 4 };
-
-			await connectAndAuth();
-
-			await expect(
-				wsActions.sendMessage("test-session", "hello"),
-			).resolves.toEqual({ seq: 4 });
-		});
-
-		// The sender misses the broadcast, so the reply is its only copy of the
-		// prompt its command expanded to.
-		it("sendMessage returns what a Pockode command expanded to", async () => {
-			chatMessageResult = {
-				seq: 4,
-				content: "Lead the work…",
-				command: { name: "pockode-lead" },
-			};
-
-			await connectAndAuth();
-
-			await expect(
-				wsActions.sendMessage("test-session", "/pockode-lead"),
-			).resolves.toEqual({
-				seq: 4,
-				expanded: {
-					content: "Lead the work…",
-					command: { name: "pockode-lead" },
-				},
-			});
-		});
-
-		// Purely additive on the wire: an older server answers with an empty
-		// result, which has to read as "no address" rather than fail the send or
-		// become a seq of 0, which names no record.
-		it("sendMessage tolerates a server that sends no seq", async () => {
-			await connectAndAuth();
-
-			await expect(
-				wsActions.sendMessage("test-session", "hello"),
-			).resolves.toEqual({});
-		});
-
 		it("throws when not connected", async () => {
-			await expect(wsActions.sendMessage("test", "hello")).rejects.toThrow(
-				"Not connected",
-			);
+			await expect(
+				wsActions.sendMessage("test", "m-1", "hello"),
+			).rejects.toThrow("Not connected");
 		});
 	});
 
@@ -974,7 +923,7 @@ describe("wsStore", () => {
 			// have the most to lose from being left to time out — and they only escape
 			// that because they share the underlying client whose pending requests are
 			// rejected here.
-			const pendingSend = wsActions.sendMessage("session-1", "hello");
+			const pendingSend = wsActions.sendMessage("session-1", "m-1", "hello");
 			const sendRejection =
 				expect(pendingSend).rejects.toThrow("Connection lost");
 			const pendingStart = wsActions.startWork("work-1");
@@ -1007,7 +956,7 @@ describe("wsStore", () => {
 
 			const otherRequest = wsActions.getFile("big.png").catch((error) => error);
 			const agentStarters = [
-				wsActions.sendMessage("session-1", "hello"),
+				wsActions.sendMessage("session-1", "m-1", "hello"),
 				wsActions.startWork("work-1"),
 			].map((pending) => {
 				const settled = { done: false };

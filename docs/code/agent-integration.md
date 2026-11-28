@@ -12,8 +12,8 @@ Pockode integrates AI Agents (Claude and Codex) through subprocess management. T
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  ws/rpc_chat.go                                                      │
-│  ├─ chat.message → ChatClient.SendMessageExcluding() / SendAnswers()│
-│  ├─ chat.html_action → ChatClient.SendHTMLActionExcluding()         │
+│  ├─ chat.message → ChatClient.SendMessage() / SendAnswers()         │
+│  ├─ chat.html_action → ChatClient.SendHTMLAction()                  │
 │  ├─ chat.interrupt → ChatClient.Interrupt()                         │
 │  └─ chat.permission_response → ChatClient.SendPermissionResponse()  │
 └───────────────────────────────┬─────────────────────────────────────┘
@@ -889,8 +889,8 @@ minted once in `chat.Client.sendEvent` and handed to `process.Process.SendMessag
 as the prompt's moment, so a turn the message opens has `TurnState.OpenedAt`
 equal to the record's stamp — the tail line's clock and the reply's settled
 span ([tool-call-ui.md](../tool-call-ui.md#where-the-duration-comes-from)) start
-together; the sender, left out of that record's broadcast, gets the same moment
-on `rpc.MessageResult`. It is Pockode's clock, never the
+together; the sender reads it off the same record, which it is sent like
+every other subscriber. It is Pockode's clock, never the
 CLI's: a call is measured from when it could start (its `tool_call`, or the
 answer that let it run) to the `tool_result` that settled it, and one replayed
 while still running is counted against the `server_time` reading
@@ -1226,8 +1226,8 @@ The message record carries those descriptions as `attachments`, a list of the
 same `FileBlock` a tool result's file uses, so a client draws both with one
 code path and fetches either through `attachment.get`. The record names files
 by id only: the path on this machine is handed to the agent and nowhere else.
-The sender, left out of the broadcast, gets the descriptions back on the
-`chat.message` reply.
+The sender reads the descriptions off that record too; the `chat.message`
+reply carries nothing.
 
 What the agent is handed is each adapter's business, decided at delivery:
 
@@ -1721,8 +1721,8 @@ wording has one home — the engine quotes an answer through the same line when 
 tells a story or a watcher the question was settled
 ([work-system.md](work-system.md#input-5-a-posted-question-stopped-waiting)),
 which is why it lives in `agent` and not in `chat`; a `chat.message` carrying
-`answering` sends empty `content` and is refused if it does not, and the reply's
-`content` hands the written body back to the sender, which the broadcast skips.
+`answering` sends empty `content` and is refused if it does not; the sender
+reads the written body off its own record, like every other subscriber.
 
 A `note` may sit beside a decline (its reason) or beside picked options (a
 remark on them, a multi-select's **Other** included). `chat.validateNote`
@@ -5224,8 +5224,9 @@ policy, in `Sequencer.Append`:
   logged as an error. A session that no longer exists (`ErrSessionNotFound`)
   gets no warning: nobody is watching it.
 - The error is returned, and the caller decides only whether *its own*
-  operation failed. A message still goes to the agent, and its reply carries no
-  seq, id or timestamp; a permission response or a reviewer's verdict still
+  operation failed. A message still goes to the agent, and no record ever names
+  its id, so the sender's echo is never claimed and the warning is what it is
+  told; a permission response or a reviewer's verdict still
   succeeds, since the answer reached the agent; posting or withdrawing a
   question and `RecordWarning` fail; process events go on moving the turn. A
   fork whose "will not remember" warning cannot be written fails as a whole
@@ -5245,10 +5246,10 @@ number out on every item (its first and newest record's, `seq` and
 only ever reads it back.
 
 **Counting records client-side is the trap the number exists to close.** Not
-every record reaches every client as an update: the tab that sent a message
-is left out of that message's item, and a record written before a client
-subscribed (or while it was reconnecting) reaches it only on a history page. A
-client's own counter would drift by one for each — silently, and a fork would
+every record reaches every client as an update of its own: a record written
+before a client subscribed reaches it only on a history page, and one written
+while it was reconnecting on a page or folded into the one update a resume
+answers with. A client's own counter would drift for each — silently, and a fork would
 then cut somewhere the user never chose. The seqs a client knows can be sparse
 for the same reason, which is harmless: it can only anchor on a record it has
 seen.

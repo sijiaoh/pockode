@@ -1,5 +1,5 @@
 import type { AppAuthCredentialParams } from "../lib/loginTicket";
-import type { ChatPage, ChatStreams } from "./chatItems";
+import type { ChatPage, ChatStreams, ChatUpdate } from "./chatItems";
 import type { ContentBlock, FileBlock } from "./content";
 import type { AgentType } from "./settings";
 import type * as Wire from "./wire.generated";
@@ -619,12 +619,12 @@ export type ContentPart = { id: string } & (
 			/** What was said back. Set on `answered` and `declined`. */
 			answer?: QuestionAnswerRecord;
 			/**
-			 * The `message_id` of the message that carried `answer`, when its record
-			 * had one. It is how the card learns that a Stop threw that answer away
-			 * unread (docs/answering-ui.md §6), which is derived as the card is drawn,
-			 * never written onto it.
+			 * A Stop threw `answer` away before the agent read it, and the question
+			 * is open again: the server's item keeps the answer it lost
+			 * (`discarded_answer`) until a new answer or a withdrawal replaces it
+			 * (docs/answering-ui.md §6).
 			 */
-			answerMessageId?: string;
+			unread?: boolean;
 			/** Absent reason on a `cancelled` card means the agent withdrew it. */
 			reason?: ExpiryReason;
 			/**
@@ -702,18 +702,20 @@ export interface UserMessage {
 	 * The last history record folded into this message, and so the cut point a
 	 * fork anchored here uses: its item's `last_seq`, kept below whatever is
 	 * drawn after it. Absent when no record carries one: a record that could not
-	 * be persisted, or a message this client sent itself talking to a server
-	 * too old to answer `chat.message` with a seq (see `MessageResult`).
+	 * be persisted, or a message this client sent whose record has not arrived
+	 * yet.
 	 */
 	anchorSeq?: HistorySeq;
 	/**
-	 * The server's id for the message record — what a later record names it by
-	 * (`message_discarded`). Not `id`, which is this client's key for the row.
-	 * On the sender's echo it arrives with the
-	 * `chat.message` reply; absent until then, and for good when the record could
-	 * not be written or the server is too old to send one.
+	 * The id the message record carries — what a later record names it by (a
+	 * read point, `message_discarded`). Not `id`, which is this client's key
+	 * for the row. On the sender's echo it is the id the echo was sent under,
+	 * from the first frame; absent on a record written before the field
+	 * existed.
 	 */
 	messageId?: string;
+	/** A Stop threw the message away before the agent read it. */
+	discarded?: boolean;
 	// Present only for system-driven messages; absent means a user-typed message.
 	source?: MessageOrigin;
 	subtype?: MessageSubtype;
@@ -722,7 +724,7 @@ export interface UserMessage {
 	 * The posted questions this message answers, when it answers any. The bubble
 	 * is drawn from these rather than from `content`, which is the same facts
 	 * flattened for the agent to read — written by the server, and empty on the
-	 * sender's echo until its reply arrives (docs/answering-ui.md §3).
+	 * sender's echo until its record arrives (docs/answering-ui.md §3).
 	 */
 	answering?: QuestionAnswerRecord[];
 	/**
@@ -734,14 +736,15 @@ export interface UserMessage {
 	 * The files the user sent with the message, each described by its
 	 * `attachment_id` through `attachment.get` (a raster image's bytes then
 	 * come from `GET /api/chat/attachments`). On the sender's echo these are
-	 * what the client knew at send time until the reply replaces them with the
-	 * server's description (type and dimensions read from the stored bytes).
+	 * what the client knew at send time until its record replaces them with
+	 * the server's description (type and dimensions read from the stored
+	 * bytes).
 	 */
 	attachments?: FileBlock[];
 	/**
 	 * What a page sent, when the message is a page's send rather than typed.
 	 * The bubble is drawn from this; `content` is the agent's text, written by
-	 * the server and empty on the sender's echo until its reply arrives.
+	 * the server and empty on the sender's echo until its record arrives.
 	 */
 	htmlAction?: HtmlAction;
 }
@@ -1093,6 +1096,13 @@ export interface RemoteUrlChangedNotification extends RemoteUrlSubscribeResult {
 
 export interface MessageParams {
 	session_id: string;
+	/**
+	 * The id this client minted for the message (`generateUUID`): its record
+	 * carries it, which is how this client knows its own message when the
+	 * record arrives, and the server sends nothing under an id its history
+	 * already holds, so a retry cannot send it twice.
+	 */
+	message_id: string;
 	content: string;
 	/**
 	 * The posted questions this message answers. The server validates every
@@ -1117,49 +1127,6 @@ export interface MessageAttachmentParams {
 }
 
 /**
- * The reply to `chat.message`: where the server put the message just sent.
- *
- * This client is left out of the broadcast that carries every other record's
- * seq — it already echoed the message into its own transcript — so this reply is
- * the only place it learns the address of its own message, and without it that
- * message could not be forked from until the session was reloaded.
- *
- * `seq` is absent when the record was not persisted, and from servers too old to
- * send it at all. Both mean the same thing here and neither is an error: the
- * message stays unaddressable, which is what every locally sent message used to
- * be.
- */
-export interface MessageResult {
-	seq?: HistorySeq;
-	/** The id the message's record carries; omitted exactly when `seq` is. */
-	message_id?: string;
-	/**
-	 * The message's transcript item id: the sender is left out of the update
-	 * carrying the item, and later updates name the message by this. Omitted
-	 * exactly when `seq` is.
-	 */
-	item_id?: number;
-	/**
-	 * Set when the server wrote the text the agent was sent: the prompt a Pockode
-	 * command expanded to (with `command` as the server parsed it), or the body
-	 * written from a message's `answering`. The `content` its record carries,
-	 * which this client would otherwise never see.
-	 */
-	content?: string;
-	command?: PockodeCommandInvocation;
-	/** The files the message carried, as its record describes them. */
-	attachments?: FileBlock[];
-	/** On `chat.html_action`'s reply: the action as its record carries it. */
-	html_action?: HtmlAction;
-	/**
-	 * The record's `observed_at`, omitted exactly when `seq` is: when the reply
-	 * this message opens began, which the sender — left out of the record's
-	 * broadcast — has no other way to learn.
-	 */
-	observed_at?: string;
-}
-
-/**
  * What a page sent the agent (docs/tool-call-ui.md § The action message): a
  * `message` record's `html_action`. An event — what was pressed on which
  * page — never state.
@@ -1168,6 +1135,8 @@ export type HtmlAction = Wire.Action;
 
 export interface HtmlActionParams {
 	session_id: string;
+	/** As `MessageParams.message_id`: the action is sent as a message. */
+	message_id: string;
 	page: string;
 	/** 1–128 characters, no control characters. */
 	action: string;
@@ -1407,6 +1376,26 @@ export interface ChatMessagesSubscribeParams {
 	session_id: string;
 	/** Omitted asks for the server's default page size. */
 	limit?: number;
+	/** Asks to continue the copy this client holds; omitted asks for a page. */
+	resume?: ChatResume;
+}
+
+/**
+ * The copy of a transcript a re-subscribing client holds (`rpc.ChatResume`):
+ * how a reconnect keeps the pages the user had scrolled back through.
+ */
+export interface ChatResume {
+	/**
+	 * `AuthResult.server_instance` of the connection the copy was read over.
+	 * The server answers one that is not its own with a snapshot: its seqs
+	 * may name other records now.
+	 */
+	server_instance: string;
+	/**
+	 * The `through_seq` of the last page or update the copy applied: it holds
+	 * everything up to it.
+	 */
+	after_seq: HistorySeq;
 }
 
 /**
@@ -1416,7 +1405,7 @@ export interface ChatMessagesSubscribeParams {
  */
 export type ChatMessagesHistoryPage = ChatPage;
 
-export interface ChatMessagesSubscribeResult extends ChatPage {
+interface ChatSubscribeStart {
 	/**
 	 * What the session is doing at the moment of subscribing. Read for the
 	 * session's turn until `session.detail` reports it; the transcript itself
@@ -1427,10 +1416,29 @@ export interface ChatMessagesSubscribeResult extends ChatPage {
 	 * What is still being generated as of the subscription: the main agent's
 	 * thinking, and what each call in flight has said about itself. Never
 	 * recorded, so a client subscribing mid-run learns it only here; the
-	 * subscription's `chat.delta` notifications continue it.
+	 * subscription's `chat.delta` notifications continue it. Replaces what
+	 * the client held of it on a resume too.
 	 */
 	streams?: ChatStreams;
+	/** The server's clock as it built the reply (RFC 3339). */
+	server_time?: string;
 }
+
+/**
+ * Which of its two starts a subscription was given (`rpc.ChatDelivery`). A
+ * snapshot is the newest page, and replaces whatever the client held, older
+ * pages included. A resume is an update to the copy named in `resume`, which
+ * the client keeps: what the records after `after_seq` changed, applied as a
+ * `chat.update` is. A client that asked to resume may be given a snapshot —
+ * another server instance, or a gap the server will not answer as an update
+ * — and is never refused for asking.
+ */
+export type ChatMessagesSubscribeResult =
+	| (ChatPage & ChatSubscribeStart & { delivery: "snapshot" })
+	| (ChatSubscribeStart & {
+			delivery: "resume";
+			update: Omit<ChatUpdate, "type" | "streams_ended">;
+	  });
 
 export interface ChatMessagesHistoryParams {
 	session_id: string;

@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/pockode/server/agent"
@@ -10,9 +9,8 @@ import (
 	"github.com/sourcegraph/jsonrpc2"
 )
 
-// The sender is left out of the broadcast, so the reply is where it learns
-// what the server made of its files — read from the stored bytes, not taken
-// from anything the client said about them.
+// The record describes the files as the server read them from the stored
+// bytes, not as the client said they were.
 func TestHandler_MessageWithAttachments(t *testing.T) {
 	mock := &mockAgent{}
 	env := newTestEnvWithAgent(t, mock, attachmentMockAgent{mock}, t.TempDir())
@@ -29,17 +27,14 @@ func TestHandler_MessageWithAttachments(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("chat.message failed: %s", resp.Error.Message)
 	}
-	var result rpc.MessageResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatal(err)
-	}
 	if got := mock.sentMessagesFor(row.ID); len(got) != 1 {
 		t.Errorf("agent was sent %q, want the message once", got)
 	}
-	if len(result.Attachments) != 1 {
-		t.Fatalf("result attachments = %+v", result.Attachments)
+	records := messageRecords(t, env, row.ID)
+	if len(records) != 1 || len(records[0].Attachments) != 1 {
+		t.Fatalf("message records = %+v, want one carrying the file", records)
 	}
-	got := result.Attachments[0]
+	got := records[0].Attachments[0]
 	if got.AttachmentID != id || got.Name != "shot.png" || got.MIME != "image/png" || got.Width != 1 || got.Height != 1 {
 		t.Errorf("described as %+v", got)
 	}

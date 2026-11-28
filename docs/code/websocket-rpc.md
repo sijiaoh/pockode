@@ -362,44 +362,78 @@ Follows standard JSON-RPC 2.0; Pockode has no custom extensions.
 }
 ```
 
-### Growing a reply
+### Growing a result
 
-`chat.message` answers `rpc.MessageResult` — `omitempty` fields only: `seq`,
-telling the sender where its own message landed in the history, `message_id`,
-and `item_id`, the transcript item the message became, by which every later
-`chat.update` names it ([agent-chat.md](../agent-chat.md#live-updates)), and, for a
-message that invoked a [Pockode command](../pockode-commands.md#what-is-recorded),
-`content` and `command` — the prompt the command expanded to and the command as
-parsed — or, for a message carrying `answering`, `content` alone: the body the
-server wrote from the answers ([agent-integration.md](agent-integration.md#answering)),
-and, for a message carrying files, `attachments` — each file as its record
-describes it ([agent-integration.md](agent-integration.md#files-the-user-sends)).
-`chat.html_action`, a page's send ([tool-call-ui.md](../tool-call-ui.md#the-action-message)),
-answers the same result with `content` and `html_action` — the text the server
-wrote for the agent and the action as its record holds it. Both carry
-`observed_at`, the record's moment, omitted exactly when `seq` is: the instant
-the reply this message opens began, which the sender needs to measure that
-reply ([tool-call-ui.md](../tool-call-ui.md#where-the-duration-comes-from)).
-It needs one because the sender is deliberately left out of the
-`chat.update` that carries the message's item (it has already echoed the
-message into its own transcript), so the reply is the only place that address —
-or a body the server wrote — can reach it. What the address is for is in [session-fork-ui.md](../session-fork-ui.md#which-messages-get-a-menu-and-when-fork-is-on-it):
-a record a client cannot name is a record it cannot fork from.
+*Adding* a field to a request or a result needs **no coordinated deploy**, in
+either direction. An older peer ignores what it does not read; a newer one
+against an older peer sees the field absent, which `omitempty` already makes a
+legal message. A reader must therefore treat a missing optional field as a
+state it already knows how to be in, not as an error.
 
-That method used to answer a bare `{}`, and growing it needed **no coordinated
-deploy**, which is the general rule worth stating: *adding* a field to a result
-is safe in both directions. An older client ignores what it does not read; a
-newer client against an older server sees the field absent, which `omitempty`
-already makes a legal answer — here it means "this message has no address",
-which was that client's normal state before the field existed. A client must
-therefore treat a missing optional field as a state it already knows how to be
-in, not as an error.
+`chat.messages.subscribe` is the worked example. Its params grew `resume` and
+its result grew `delivery` ([agent-chat.md](../agent-chat.md#live-updates)). A
+client that sends no `resume` — an old tab — is answered with a snapshot whose
+page fields are flat on the result, exactly as before `delivery` existed. A new
+client against an old server sends `resume`, the server ignores it, and the
+reply carries no `delivery`: the client reads anything but `"resume"` as a
+snapshot (`useChatMessages`), which is what that reply is. Neither side has to
+know the other's version.
+
+Taking a field *away* is not the mirror image. A reader that relied on it is
+left with nothing, and nothing on the wire says why. `chat.message` used to
+answer `rpc.MessageResult` — the message's `seq`, its item id, the body the
+server wrote — because the sender was left out of the broadcast carrying its
+own record. Once the client minted the id and the sender was sent its record
+like everyone else ([below](#sending-a-message)), the reply went back to
+`{}`. That removal was safe only because the web client is served by
+the same binary and moves with it; a tab cached from before is told of the
+mismatch by `auth`'s `version` and reloads ([Authentication Flow](#authentication-flow)).
 
 *Changing what a field means* is the opposite case and does need lockstep, with
 nothing on the wire to reveal the disagreement. `session.fork`'s `anchor_seq` is
 the example ([session-fork-ui.md](../session-fork-ui.md#data-contract)) — same
 type, same name, different answer about which record it names. Do not reason
 about the two kinds of change from the same rule.
+
+### Sending a message
+
+`chat.message` and `chat.html_action` carry a `message_id` the client minted,
+and the reply to either is `{}`. The id is what makes the rest of the contract
+work without the reply:
+
+- **The sender is sent its own record**, in the same `chat.update` as every
+  other subscriber ([agent-chat.md](../agent-chat.md#live-updates)). Its echo
+  already has the id, so it becomes that item whenever the item arrives —
+  before the reply, after it, or on a resume after a reply lost with the
+  connection ([frontend-state.md](frontend-state.md#this-clients-own-messages)).
+  When the server minted the id, the sender could learn it only from the
+  reply, so it had to be left out of the broadcast and the reply had to carry
+  everything the record did (the `seq`, the item id, the body a command or an
+  answer expanded to, the moment the reply began). A reply lost on the way left
+  a message with no address.
+- **A retry is safe.** A send under an id the session's history already holds
+  writes nothing, sends nothing and is answered as sent; sends under one
+  (session, id) run one at a time, so a retry racing the original waits for it
+  and then finds its record. An attempt that was refused leaves nothing to
+  find, and its retry is sent afresh. Two attempts leave history disagreeing
+  with the agent, and are remembered instead. One handed over whose record
+  could not be written is answered as sent again, so the agent does not read
+  it twice. One that wrote the record and then failed to hand the message to
+  the agent has its retry refused with `chat.ErrRecordedNotDelivered`
+  (`InvalidParams`), because the record existing does not mean the agent read
+  it, and sending it again under the same id would leave one record for a
+  message the agent read later than it says. That memory lasts as long as the
+  process — as long as the agent the message did or did not reach. A history
+  that cannot be read leaves a retry unrecognisable; the message is sent
+  anyway, a possible duplicate being the lesser harm than a disk hiccup
+  refusing every message. The client does not retry automatically today; the contract is there
+  so a send whose reply was lost (["Connection lost"](#request-timeout)) can
+  be repeated without becoming two messages.
+- **The id is validated at the boundary** (`checkMessageID` in
+  `ws/rpc_chat.go`): a UUID in canonical form, or `InvalidParams` with nothing
+  written. It goes into the record and is what a retry is matched on and what a
+  read point names, so one message must have one spelling. Absent, the server
+  mints one, which keeps a tab cached from before working.
 
 ### Notification (Server → Client)
 
@@ -569,7 +603,7 @@ request that will be refused the same way forever is a button that cannot work.
 
 #### What the two lists grew
 
-Adding a field to a result needs no coordinated deploy ([Growing a reply](#growing-a-reply)),
+Adding a field to a result needs no coordinated deploy ([Growing a result](#growing-a-result)),
 and everything here is an addition:
 
 | Message | Field | What it says |
@@ -625,12 +659,51 @@ This pattern ensures:
 | `agent_role.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
 | `schedule.list.subscribe` | ✅ Full list, each with its latest run | `onSubscribed` replaces state |
 | `schedule.detail.subscribe` | ✅ The schedule and its newest run page | `onSubscribed` replaces state ([run paging](../projects/api.md#schedule-runs)) |
-| `chat.messages.subscribe` | ✅ Newest history page | `onSubscribed` replaces state ([paging](../agent-chat.md#history-paging)) |
+| `chat.messages.subscribe` | ✅ What the client missed, or the newest history page | Resumes the copy it holds when the server instance is the same; otherwise the page replaces it ([below](#resuming-a-chat)) |
 | `git.diff.subscribe` | ✅ Diff data | `onSubscribed` updates state |
 | `fs.subscribe` | ❌ Empty reply | `onSubscribed` triggers refresh |
 | `git.subscribe` | ❌ Empty reply | `onSubscribed` triggers refresh |
 
 For subscriptions that don't return initial data, hooks pass their refresh callback to `onSubscribed`, ensuring the latest state is fetched immediately after reconnection.
+
+#### Resuming a chat
+
+A chat is the one subscription that does not start over. A transcript can be
+hundreds of items deep, a phone drops its connection every time it sleeps, and
+the user may have scrolled back through older pages: replacing all of it with
+the newest page on every reconnect re-sent what the client already had and
+threw away the history it had loaded. So `chat.messages.subscribe` takes
+`resume: {server_instance, after_seq}` — the instance the copy was read from
+(`auth`'s `server_instance`) and the `through_seq` of the last page or update
+applied — and answers `delivery: "resume"` with one `update` holding every turn
+and item the records after `after_seq` changed, as each stands now. The client
+applies it like a `chat.update` and keeps the rest of its copy.
+
+The server decides, and never refuses: anything it cannot serve is answered
+`delivery: "snapshot"`, the newest page, which the client installs as it always
+did.
+
+- **Another instance** gets a snapshot. Seqs are per history file, and a
+  restarted server can number different records the same way (a power loss can
+  drop a tail), so a seq from another process is no promise about this one.
+- **A gap it cannot serve** gets one too: `after_seq` past the newest record,
+  or more than `projection.MaxResumeGap` records behind it. That cap is the
+  page size; past it, a page is the cheaper answer
+  (`projection.ErrResumeUnavailable`). So does a history with lines the store
+  had to skip, whose item ids a fold from the file again does not keep.
+- **A resync** always takes a snapshot. The client sends no `resume` on
+  purpose, because the hole `chat.resync` reports is one its copy cannot vouch
+  past.
+
+No replay log is kept to serve the gap. Every projection entry, turn and the
+plan carries a stamp: the seq of the newest record handed to the projection
+when its fold last changed it, and
+`Projection.Since` collects everything stamped after `after_seq` with the same
+builder `TakeUpdate` uses. That keeps working after the projection was let go
+and folded again from the file, which a log in memory would not survive. How
+the stamps stay right — and what the race between registering and cutting
+means for a resume — is in
+[subscription-system.md](subscription-system.md#chat-delivery).
 
 ## Authentication Flow
 
@@ -1050,8 +1123,8 @@ and refuses every later message: accepting them would only lose them silently
 in the moment before jsonrpc2 notices the connection is gone.
 
 Closing is safe because nothing here was ever guaranteed to arrive: delivery is
-at-most-once, the client reconnects and resubscribes to full state
-([Reconnection Recovery](#reconnection-recovery)), and a request whose reply
+at-most-once, the client reconnects and resubscribes — to full state, or for
+a chat to what it missed ([Reconnection Recovery](#reconnection-recovery)), and a request whose reply
 was lost fails at once with "Connection lost" rather than waiting out its
 timeout ([Request Timeout](#request-timeout)).
 

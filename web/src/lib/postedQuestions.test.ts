@@ -143,25 +143,42 @@ describe("posted questions in the transcript", () => {
 	});
 
 	describe("what became of it", () => {
-		it("draws an answer, and the message it went out in", () => {
+		it("draws an answer", () => {
+			const [card] = replyTo(() =>
+				question("Which?", {
+					status: "answered",
+					answer: {
+						request_id: "q-2",
+						answers: ["SQLite"],
+						answered_at: "2026-01-02T14:05:00Z",
+					},
+					answered_in: "m9",
+				}),
+			);
+			expect(card).toMatchObject({
+				status: "answered",
+				answer: { answers: ["SQLite"] },
+			});
+			expect(card).not.toHaveProperty("unread");
+		});
+
+		// A Stop reopened the question; the card keeps what was said, and says
+		// it went unread.
+		it("draws an answer a Stop threw away as unread", () => {
 			expect(
 				replyTo(() =>
 					question("Which?", {
-						status: "answered",
-						answer: {
+						status: "open",
+						discarded_answer: {
 							request_id: "q-2",
 							answers: ["SQLite"],
 							answered_at: "2026-01-02T14:05:00Z",
 						},
-						answered_in: "m9",
+						discarded_in: "m9",
 					}),
 				),
 			).toMatchObject([
-				{
-					status: "answered",
-					answer: { answers: ["SQLite"] },
-					answerMessageId: "m9",
-				},
+				{ status: "answered", answer: { answers: ["SQLite"] }, unread: true },
 			]);
 		});
 

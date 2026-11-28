@@ -197,6 +197,15 @@ func OrLegacy(current, deprecated string) string {
 
 type MessageParams struct {
 	SessionID string `json:"session_id"`
+	// MessageID is the id the client minted for the message: a UUID in its
+	// canonical form (lowercase, hyphenated), which its record carries
+	// (agent.MessageRecord.MessageID). The client knows its own message by it
+	// when the record arrives on its subscription, as every record does. It is
+	// also what makes a retry safe: a message under an id the session's history
+	// already holds is not sent again, and the send is answered as if it had
+	// gone through (chat.Client.SendMessage). Absent has the server mint one,
+	// for a client too old to.
+	MessageID string `json:"message_id,omitempty"`
 	// Content is the message. Empty when Answering is set — the server writes
 	// that message itself, from the answers, so the wording the agent reads
 	// lives in one place whoever answered — and refused when it is not.
@@ -248,58 +257,13 @@ type QuestionAnswerParams struct {
 	Note string `json:"note,omitempty"`
 }
 
-// MessageResult tells the sender where its own message landed in the session's
-// history, so it can name that record later — to fork from it, above all.
-//
-// The sender is deliberately left out of the broadcast that carries every other
-// record's seq, because it has already echoed the message into its own
-// transcript. This reply is therefore the only place it can learn the address of
-// the one message it put there itself.
-//
-// Seq is omitted when the record was not persisted, and a server too old to send
-// it omits it too. Both mean the same thing to a client — the message is not
-// addressable — which is the state it was already in for every message it sent,
-// so neither is an error.
-//
-// Content is set for a message whose text the server wrote rather than took as
-// typed, and is the content its record carries (agent.MessageRecord): the prompt a
-// Pockode command expanded to, with Command beside it as parsed, or the body
-// written from the answers of a message carrying Answering. The sender has only
-// what it sent, and this reply is its one way to learn what the agent was sent.
-//
-// MessageID is the id the message's record carries, omitted exactly when Seq
-// is. It is how later records name this message — above all message_discarded,
-// a Stop throwing it away unread, which the sender has to find on the very
-// bubble it drew itself.
-type MessageResult struct {
-	Seq       session.HistorySeq `json:"seq,omitempty"`
-	MessageID string             `json:"message_id,omitempty"`
-	// ItemID is the message's transcript item (projection.PageItem.ID): the
-	// sender is left out of the update that carries the item, and every later
-	// update naming it — the turn it opened, a Stop discarding it — names it
-	// by this. Omitted exactly when Seq is.
-	ItemID  int                      `json:"item_id,omitempty"`
-	Content string                   `json:"content,omitempty"`
-	Command *agent.CommandInvocation `json:"command,omitempty"`
-	// HTMLAction is the page action a chat.html_action message was written
-	// from, as its record holds it, with Content beside it.
-	HTMLAction *htmlpage.Action `json:"html_action,omitempty"`
-	// Attachments describe the files the message carried as its record does —
-	// type, size and dimensions read from the stored bytes — for the same
-	// reason as Content: the sender is left out of the broadcast.
-	Attachments []agent.FileBlock `json:"attachments,omitempty"`
-	// ObservedAt is the moment the message's record carries
-	// (agent.ObserveAt), omitted exactly when Seq is. The sender
-	// draws the reply this message opens without ever receiving that record, so
-	// this is where it learns when the reply began.
-	ObservedAt *time.Time `json:"observed_at,omitempty"`
-}
-
 // HTMLActionParams is what a page in the chat sent on the reader's press
 // (docs/tool-call-ui.md § The action message). Page is the card's id, which
 // the client fills in from the card, never from the page.
 type HTMLActionParams struct {
 	SessionID string `json:"session_id"`
+	// MessageID is MessageParams.MessageID: the action is sent as a message.
+	MessageID string `json:"message_id,omitempty"`
 	Page      string `json:"page"`
 	Action    string `json:"action"`
 	// Data is any JSON value; absent means {}.
@@ -1172,23 +1136,66 @@ type ChatMessagesSubscribeParams struct {
 	// projection.DefaultPageSize; anything above projection.MaxPageSize is
 	// clamped to it.
 	Limit int `json:"limit,omitempty"`
+	// Resume asks to continue a copy of the transcript the client already
+	// holds instead of starting over from the newest page. Absent asks for
+	// the page.
+	Resume *ChatResume `json:"resume,omitempty"`
 }
 
+// ChatResume is the copy of a transcript a re-subscribing client holds: how
+// a reconnect keeps the pages the user had scrolled back through.
+type ChatResume struct {
+	// ServerInstance is AuthResult.ServerInstance of the connection the copy
+	// was read over. A seq is an address only within one server instance
+	// (see there), so one from another is answered with a page.
+	ServerInstance string `json:"server_instance"`
+	// AfterSeq is the through_seq of the last page or update the client
+	// applied: the copy holds everything up to it.
+	AfterSeq session.HistorySeq `json:"after_seq"`
+}
+
+// ChatDelivery is which of its two starts a chat subscription was given.
+type ChatDelivery string
+
+const (
+	// ChatDeliverySnapshot: the reply is the newest page. Whatever the
+	// client held is replaced by it, older pages included — they are fetched
+	// again with chat.messages.history.
+	ChatDeliverySnapshot ChatDelivery = "snapshot"
+	// ChatDeliveryResume: the reply is an update (Update) to the copy the
+	// client named in ChatResume, which it keeps.
+	ChatDeliveryResume ChatDelivery = "resume"
+)
+
 type ChatMessagesSubscribeResult struct {
-	// Page is the newest page of the session's transcript — its turns and
-	// items, each complete as it stands now — with the cursor for the page
-	// before it and the session's current plan. Earlier pages are fetched
-	// with chat.messages.history. Its through_seq is the newest record the
-	// page holds: a notification for a record at or before it is already in
-	// the page.
-	projection.Page
+	// Delivery says which of Page and Update the reply carries. A client that
+	// asked to resume is given a snapshot when the server instance is not
+	// the one it named, or when what it missed cannot be answered as an
+	// update (projection.ErrResumeUnavailable); it is never refused for it.
+	Delivery ChatDelivery `json:"delivery"`
+	// Page, for a snapshot, is the newest page of the session's transcript —
+	// its turns and items, each complete as it stands now — with the cursor
+	// for the page before it and the session's current plan. Earlier pages
+	// are fetched with chat.messages.history. Its through_seq is the newest
+	// record the page holds: a notification for a record at or before it is
+	// already in the page. Its fields are the reply's own, as they were
+	// before resuming existed.
+	*projection.Page
+	// Update, for a resume, is everything the records after
+	// ChatResume.AfterSeq changed (projection.Projection.Since), applied as a
+	// chat.update is. Its through_seq plays the page's part for the
+	// notifications that follow. Items it names that the client never paged
+	// in are dropped like an update's are: the page that holds them will
+	// bring them as they stand.
+	Update *projection.Update `json:"update,omitempty"`
 	// Turn is what the session is doing at the moment of subscribing. The
 	// transcript's own subscription reports it because the transcript is what it
 	// governs: a turn that is not running is what tells the client that every
 	// message still streaming has stopped, which is the only thing that closes
 	// out a transcript whose server died mid-stream (docs/lifecycle-ui.md §2.4).
 	Turn Turn `json:"turn"`
-	// Streams is what is still being generated as of the subscription: text
+	// Streams is what is still being generated as of the subscription, and
+	// replaces whatever the client held of it on a resume too: text
 	// that will become an item once it is over, and what calls still in
 	// flight have said about themselves. Live state, never recorded
 	// (agent.LiveEvent), so a client that subscribes mid-run — on a phone the

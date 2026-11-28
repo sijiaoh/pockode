@@ -98,9 +98,8 @@ export function DiscardedSummary({ ids, sessionId, onRestore }: SummaryProps) {
 					Commands are restored one at a time from their message's … menu.
 				</p>
 			)}
-			{/* Only while there is earlier history to load: otherwise the message
-			    is one this tab sent and has not heard back about yet, and the
-			    reply naming it is on its way. */}
+			{/* Only while there is earlier history to load: a message named
+			    here and loaded nowhere is on a page further back. */}
 			{onRestore && notLoaded > 0 && hasMoreHistory && (
 				<p className="text-xs text-th-text-muted">
 					{notLoaded === 1

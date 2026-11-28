@@ -309,6 +309,9 @@ type interposed struct {
 	staleGet   *session.SessionMeta
 	// afterRead runs once a history read has its records.
 	afterRead func()
+	// damaged has every history read end in the warning the store reads in
+	// for records it had to skip.
+	damaged bool
 	// reads counts the history reads.
 	reads atomic.Int32
 }
@@ -316,6 +319,9 @@ type interposed struct {
 func (s *interposed) GetHistory(ctx context.Context, sessionID string) ([]json.RawMessage, error) {
 	s.reads.Add(1)
 	records, err := s.FileStore.GetHistory(ctx, sessionID)
+	if s.damaged && err == nil {
+		records = append(records, json.RawMessage(`{"type":"warning","message":"Skipped 1 entry","code":"history_corrupted","seq":0}`))
+	}
 	if f := s.afterRead; f != nil {
 		s.afterRead = nil
 		f()
@@ -818,6 +824,37 @@ func TestLive_AnUpdateThatLoads(t *testing.T) {
 	}
 	if len(u.Items) != 1 || u.Items[0].Item.Tool == nil || u.Items[0].Item.Tool.ToolUseID != "tu2" || u.Items[0].Item.Tool.Status != ItemSucceeded {
 		t.Errorf("update after a read loaded it = %+v, want the call the record settled", u)
+	}
+}
+
+// TestLive_AnUpdateThatLoadsADamagedHistory: the warning a damaged history
+// is read with comes after the record just written, which is still the one
+// whose update is taken — not folded before changes are tracked.
+func TestLive_AnUpdateThatLoadsADamagedHistory(t *testing.T) {
+	store, s, l := trackedWithHistory(t)
+	s.damaged = true
+	l.linger = 0
+	ctx := context.Background()
+	release := l.Hold("s")
+	defer release()
+	liveState(t, l, "s")
+	if err := store.WriteHistory(ctx, "s", history(prompt1, started1,
+		`T1|{"type":"tool_call","tool_use_id":"tu","tool_name":"Bash"}`)); err != nil {
+		t.Fatal(err)
+	}
+	appendLine(t, store, "s", `T1|{"type":"tool_result","tool_use_id":"tu","tool_result":"ok"}`)
+	u, _, err := l.TakeUpdate(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settled bool
+	for _, it := range u.Items {
+		if it.Item.Tool != nil && it.Item.Tool.ToolUseID == "tu" && it.Item.Tool.Status == ItemSucceeded {
+			settled = true
+		}
+	}
+	if !settled {
+		t.Errorf("update = %+v, want the call the record settled", u)
 	}
 }
 

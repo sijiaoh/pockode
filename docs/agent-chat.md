@@ -26,7 +26,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Attachments | `server/ws/rpc_attachment.go` | `attachment.get` — the content a chat event references by id, answered in `file.get`'s own shape so one client path renders both ([why](code/agent-integration.md#content-blocks-and-attachments)) |
 | Agent pages | `server/ws/rpc_html_page.go` | `html_page.get` `{session_id, id}` → `{page: {id, title, html, base?, created_at}}` — a page an agent drew, by the id its `tool_result` record carries as `html_page`; immutable, so never subscribed to ([how](code/work-system.md#rendering-tool)) |
 | Sending files | `server/filetransfer/attachment.go`, `server/chat/attachments.go` | `POST /api/chat/attachments` stores a file in the session's store; `chat.message`'s `attachments` names it by id and each agent delivers it its own way ([how](code/agent-integration.md#files-the-user-sends)). Client side: `web/src/lib/chatAttachments.ts`; the composer's `+` menu (Photos / Files), a drop on the chat or a paste into the composer ([how](#attaching-by-drop-or-paste)) uploads each file as it arrives (`inputStore`), holds Send until every one is stored, and takes the files back if the message is refused |
-| Chat client | `server/chat/client.go` | Session coordination and the records Pockode writes itself; `SendMessageExcluding` (user) and `SendSystemMessage` (system automation) share one path into the sequencer |
+| Chat client | `server/chat/client.go` | Session coordination and the records Pockode writes itself; `SendMessage` (user) and `SendSystemMessage` (system automation) share one path into the sequencer |
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
 | Process manager | `server/process/manager.go` | Process lifecycle, event stream, lease reaper |
@@ -38,7 +38,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 
 ## Data Flow
 
-1. User sends message → `chat.message` RPC (files it carries were uploaded beforehand and are named by id — [how](code/agent-integration.md#files-the-user-sends))
+1. User sends message → `chat.message` RPC, under a `message_id` the client minted — a UUID in canonical form, which the record carries (files it carries were uploaded beforehand and are named by id — [how](code/agent-integration.md#files-the-user-sends)). A send under an id the session's history already holds sends nothing and writes nothing and is answered as sent, so a client may retry one whose reply it lost — unless that earlier attempt wrote the record and then failed to reach the agent, which its retry is told (`chat.ErrRecordedNotDelivered`, [why](code/websocket-rpc.md#sending-a-message)).
 2. ChatClient persists message to session history, forwards to `Process.SendMessage()` — unless the turn is holding a permission request open, the one state a message cannot be delivered in, which is refused as `InvalidParams` with nothing written ([lifecycle.md](lifecycle.md#session-one-reducer)). A turn merely *running* is not refused; the message steers it, and the answer to it begins where the agent reads it rather than where the turn ends — for an agent that cannot report that moment itself, this is also where the read point record is written ([agent-event.md](agent-event.md#the-read-point-message_ingested)).
 3. Agent subprocess receives via stdin, processes, emits stream-json events
 4. Events are parsed into typed `AgentEvent`s (Text, ToolCall, ToolResult, Error, PermissionRequest, Done, etc.)
@@ -398,7 +398,7 @@ looks at.
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `turns`, `has_more`, `next_before_seq?`, `through_seq?`, `plan?`, `turn`, `streams`, `server_time` |
+| `chat.messages.subscribe` | `id`, `session_id`, `limit?`, `resume?` (`server_instance`, `after_seq`) | `delivery`; for `"snapshot"` `turns`, `has_more`, `next_before_seq?`, `through_seq?`, `plan?`, for `"resume"` `update`; and `turn`, `streams`, `server_time` |
 | `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `turns`, `has_more`, `next_before_seq?`, `through_seq?`, `plan?`, `server_time` |
 
 **A page is a slice of the conversation, not of the record stream.** It is cut
@@ -542,8 +542,9 @@ repaired.
   so every seq a connection carries belongs to the instance its `auth` named.
   Seqs held from a connection whose `server_instance` differs from the current
   one are to be replaced by a fresh snapshot (`chat.messages.subscribe`), never
-  continued from with a cursor. Nothing in the client acts on it yet; it is the
-  contract a resuming stream will build on.
+  continued from with a cursor or resumed from. A client names the instance its
+  copy came from when it asks to resume, and the server answers a copy from
+  another instance with a snapshot ([live updates](#live-updates)).
 - `server_time` is the server's clock as the reply was built. A call still
   running in a page is counted from its `started_at`
   ([agent-integration.md](code/agent-integration.md)) against this reading plus
@@ -624,14 +625,12 @@ still being generated is extended in place, close to Codex's `item/started` /
   upsert of the `tool` item it holds back (status `awaiting_permission`, then
   `running`, `denied` or `expired`); a turn's start and end are its `turns`
   entry. Nothing is left for the client to work out from records.
-- The sender of a message is left out of the update that carries it — it drew
-  the message itself — and learns its id from its own reply:
-  `chat.message`'s result has `item_id` beside `seq` and `message_id`. The rest
-  of that update (the questions an answer settled) still reaches it, and every
-  later update names the message by that id. The reply and the notifications
-  travel separately, so a later update — the turn the message opened — can
-  arrive before the reply does: an item of kind `message` whose id the client
-  does not know yet, carrying the `message_id` its pending send will be told.
+- The sender of a message is sent the update that carries it like every other
+  subscriber. It knows the item for its own by the `message_id` it minted and
+  sent the message under, so its echo becomes that item whenever it arrives —
+  before the send's reply, after it, or after a reply lost with the
+  connection, on a resume. The reply to `chat.message` is an empty object: it
+  says the send is over, and nothing else.
 
 **`chat.delta`** extends a live stream — what is being generated and is in no
 record yet:
@@ -673,15 +672,28 @@ afresh ([subscription-system.md](code/subscription-system.md#chat-delivery)).
   the next record is not written before this one's update is taken. Deltas sit
   among them in the order the agent produced them.
 - Subscribing registers the subscriber and snapshots `streams` in one step
-  between two notifications, then cuts the page. So the deltas a subscriber is
-  sent continue `streams` with nothing missed and nothing repeated, and every
-  update after the snapshot reaches it. An update can also be in the page — its
-  record was written between the registration and the cut: if its
-  `through_seq` is not past the page's, skip its `turns` and `items`, which
-  the page already holds as of a moment no older, but apply its
-  `streams_ended`, which the snapshot taken before it does not know of.
-- A client that reconnects starts over with `chat.messages.subscribe`: the page
-  and `streams` hold everything it missed, and nothing in between is replayed.
+  between two notifications, then cuts the page (or the resumed update, below).
+  So the deltas a subscriber is sent continue `streams` with nothing missed and
+  nothing repeated, and every update after the snapshot reaches it. An update
+  can also be in the page — its record was written between the registration
+  and the cut: if its `through_seq` is not past the page's, skip its `turns`
+  and `items`, which the page already holds as of a moment no older, but apply
+  its `streams_ended`, which the snapshot taken before it does not know of.
+- A client that reconnects asks to resume the copy it holds: `resume` names
+  the server instance it read the copy from (`server_instance` of that
+  connection's `auth`) and the `through_seq` of the last page or update it
+  applied. From the same instance, the reply is `delivery: "resume"` with an
+  `update` — every turn and item the records after `after_seq` changed, as each
+  stands now, applied as a `chat.update` is — and the client keeps everything
+  else it holds, the older pages it had scrolled back through included.
+  `streams` replace the ones it held. Seqs from another instance may name other
+  records (a power loss can drop a tail, and the restarted server numbers the
+  next records the same), so that copy is answered with `delivery:
+  "snapshot"`, the newest page, which replaces it; so is a seq past the
+  history, or more than `projection.MaxResumeGap` (500) records behind it — a
+  page is cheaper then. A resume is never refused. A client given
+  `chat.resync` subscribes for a snapshot: the hole it reports is one its copy
+  cannot vouch past.
 
 
 ### Reading a page on the client
@@ -694,9 +706,12 @@ rows from them (`buildTranscript`,
 [code/frontend-state.md](code/frontend-state.md#the-transcript). The list
 component knows neither: it is handed messages.
 
-- **Subscribing installs the newest page** and the streams it came with;
-  re-subscribing — a reconnect, or `chat.resync` — installs a fresh one in its
-  place, dropping the older pages scrolled in so far.
+- **Subscribing installs the newest page** and the streams it came with. A
+  reconnect re-subscribes asking to resume, and a resumed answer is applied as
+  an update, keeping the older pages scrolled in so far ([live
+  updates](#live-updates)); a snapshot — the answer to a `chat.resync`, or to a
+  copy the server cannot continue — installs a fresh page in its place,
+  dropping them.
 - **An older page goes in front.** Its items are complete, so nothing on it
   waits for a newer page to settle it, and nothing on the loaded pages is
   touched — except that a page's turns can be newer than what the client was
@@ -726,9 +741,13 @@ it was folded from sat on, so nothing is re-anchored at a seam; a child whose
 call is not in the history at all — a fork cut it off — sits flat where it is
 ([code/frontend-state.md](code/frontend-state.md#a-subagents-children)).
 
-Reconnecting re-subscribes and so lands back on the newest page: pages already
-scrolled in are dropped rather than stitched back together, since the cursor
-chain would have to be replayed from the bottom anyway.
+Reconnecting re-subscribes and asks to resume ([live updates](#live-updates)):
+from the same server instance, the pages already scrolled in stay, with the
+cursor, and what was missed arrives as one update. Only a snapshot — another
+instance, a gap too large, or a resync — lands back on the newest page, and
+then pages already scrolled in are dropped rather than stitched back together:
+their seqs may name other records now, and the cursor chain would have to be
+replayed from the bottom anyway.
 
 **A page is held by its seam, not by the anchor.** The seam is the bottom edge
 of the first loaded row (`Seam` in `web/src/components/Chat/scrollAnchor.ts`). A
@@ -771,8 +790,8 @@ now shows — the same answer as an anchor with nothing left
 ([below](#where-the-view-sits)).
 
 A page count that went *down* is not a page landing, and the transcript reads the
-tail again when it sees one. Paging starts over exactly one way — a reconnect
-re-subscribes and so lands back on the newest page — and the rows an anchor names
+tail again when it sees one. Paging starts over exactly one way — a re-subscribe
+answered with a snapshot lands back on the newest page — and the rows an anchor names
 may be in that replacement at offsets it was never measured against. Re-subscribing
 clears "a page is loading" with it, the request it discards having learnt by the
 time it returns that it no longer speaks for this transcript: a flag left standing
@@ -834,7 +853,8 @@ mounted so that reopening is free (`web/src/components/ui/CollapsibleBody.tsx`).
 grows the DOM for as long as the session stays open. That is the trade the
 cursor makes affordable — growth happens one page at a time and only as the
 user reads back towards it, where replaying the whole transcript on open imposed it on
-every session — and a reconnect starts over from the newest page.
+every session — and a re-subscribe answered with a snapshot starts over from
+the newest page.
 
 ### The history reserve
 
@@ -996,7 +1016,8 @@ following read as the reader leaving.
 
 **Explicit inputs** are the only other thing that moves the state. Opening a
 session, the first message in an empty one, the reader sending a message and a
-reconnect replacing the transcript all read the tail. "Sent" is a row the user
+snapshot replacing the transcript all read the tail (a resumed reconnect
+replaces nothing, and what it brings lands like any update). "Sent" is a row the user
 typed among the rows added after the previous newest one — not necessarily the
 newest itself, since a send to an idle agent lands with its reply's placeholder
 below it. A count cannot say it, because a page landing above grows the list
