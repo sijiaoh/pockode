@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mermaidFrameDocument } from "./mermaidFrame";
 
 const SECRETS = { nonce: "the-nonce", token: "the-token" };
@@ -47,7 +47,15 @@ async function runFrame(imageHosts: string[] = []): Promise<RunningFrame> {
 	return { document: frameDocument, ready: opened.data, received };
 }
 
-async function settle() {
+/**
+ * Waits for the frame's first message, then one more task for any that follow
+ * it. A port's message is not ordered against a timer, so a bare
+ * `setTimeout(0)` can run first on a loaded machine and see nothing.
+ */
+async function settle(frame: RunningFrame) {
+	await vi.waitFor(() => {
+		if (frame.received.length === 0) throw new Error("nothing posted yet");
+	});
 	await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
@@ -86,7 +94,7 @@ describe("the Mermaid frame's document", () => {
 		const click = new MouseEvent("click", { bubbles: true, cancelable: true });
 
 		frame.document.getElementById("hit")?.dispatchEvent(click);
-		await settle();
+		await settle(frame);
 
 		expect(click.defaultPrevented).toBe(true);
 		expect(frame.received).toEqual([{ type: "link", href }]);
@@ -98,7 +106,7 @@ describe("the Mermaid frame's document", () => {
 		frame.document.dispatchEvent(
 			new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
 		);
-		await settle();
+		await settle(frame);
 
 		expect(frame.received).toEqual([{ type: "escape" }]);
 	});
@@ -115,7 +123,7 @@ describe("the Mermaid frame's document", () => {
 
 		refused("img-src", "https://img.example/p.png");
 		refused("style-src-elem", "https://css.example/s.css");
-		await settle();
+		await settle(frame);
 
 		expect(frame.received).toEqual([
 			{ type: "blocked", url: "https://img.example/p.png" },
