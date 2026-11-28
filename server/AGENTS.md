@@ -57,7 +57,7 @@ cloudlogin/             # 关联 / 解除关联本机：RFC 8628 device flow 与
 commitdraft/            # 为暂存内容起草提交信息：提示词 + 一次性 AI 调用（见 docs/git.md#drafting-a-commit-message）
 command/                # 命令存储 + Pockode 命令（`/pockode-*` 的解析与展开，见 docs/pockode-commands.md）
 contents/               # 文件内容获取
-datadir/                # 默认数据目录（<work>/.pockode）自带的 .gitignore（首行标记在时归 Pockode 管理、每次启动覆盖为当前版本的内容，用户删掉标记即接管，见 docs/projects/data-model.md）
+datadir/                # 数据目录的独占锁（lock.go：启动时 `datadir.Lock` 取 `<dataDir>/server.lock` 的 OS 锁，第二个服务器拒绝启动；进程退出即释放，重启前手动释放，见 docs/projects/data-model.md#atomic-persistence）；默认数据目录（<work>/.pockode）自带的 .gitignore（首行标记在时归 Pockode 管理、每次启动覆盖为当前版本的内容，用户删掉标记即接管，见 docs/projects/data-model.md）
 filestore/              # 文件存储基础设施（原子写 / 文件锁 / JSONL / 变更监听）
 filetransfer/           # 文件上传 / 下载 HTTP 端点；以 capability 为凭据的 /api/raw（含 HTML 页面的外部主机策略与上报脚本注入）
 fuzzy/                  # fzf 的模糊匹配、评分与扩展搜索语法（移植自 fzf，MIT；评分方案由调用方传入，纯算法无 IO，见 docs/code/fuzzy-matching.md）

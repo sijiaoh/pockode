@@ -390,8 +390,21 @@ quarantined copy keeps the original bytes for hand recovery.
 
 The main server is the **sole writer** of the work index (the MCP path goes
 through the in-process API, not the filesystem), so there is no cross-process
-write coordination to manage. The agent-role index has one additional writer:
-the user editing it directly on disk (same as `settings.json`), which the
+write coordination to manage. *Sole* is enforced rather than assumed: every
+store keeps its index in memory and writes it back whole, so two servers on one
+data directory would each overwrite the other's changes (and number the same
+session's history twice). A server therefore claims its data directory at
+startup with an OS lock on `<dataDir>/server.lock` (`datadir.Lock`), before it
+opens a store or publishes `server.json`, and a second server on the same
+directory exits with an error naming it — after waiting up to three seconds,
+because Windows drops a dead process's lock only eventually, and a server
+killed and started again at once must not be refused its own directory. One
+lock covers the directory as a whole — every worktree's data lives under
+`worktrees/`, and one server opens all of them. The OS drops the lock with the
+process, so a crash or a kill leaves nothing to clean up; a restart releases it
+after the shutdown and the new run takes it again
+([self-restart.md](../code/self-restart.md#the-data-directory-lock)). The
+agent-role index has one additional writer: the user editing it directly on disk (same as `settings.json`), which the
 server picks up via the fsnotify reload described below.
 
 **File lock:** A dedicated lock file (`index.json.lock`) serializes writers

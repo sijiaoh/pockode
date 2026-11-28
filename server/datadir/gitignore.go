@@ -1,5 +1,6 @@
-// Package datadir holds what Pockode keeps in a project's default data
-// directory, <work>/.pockode, beyond the stores that live there.
+// Package datadir holds what Pockode keeps in a project's data directory
+// beyond the stores that live there: the lock that gives one server the
+// directory, and the .gitignore of the default one, <work>/.pockode.
 package datadir
 
 import (
