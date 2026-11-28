@@ -13,7 +13,11 @@ pnpm run test            # 测试
 pnpm run test:watch      # 测试（监视模式）
 pnpm run test:browser    # 真浏览器测试（Chromium + WebKit；首次运行前的浏览器安装、Linux 系统依赖与成本见 docs/testing.md）
 pnpm exec tsc -b         # 类型检查
+```
 
+`src/types/wire.generated.ts` 是 history 记录与 live event 的类型，由 Go 的 `agent.WireTypes` 生成，**不要手改**（也不在 Biome 的范围内）。改了 Go 侧之后在 `server/` 下跑 `UPDATE_WIRE_TYPES=1 go test ./agent/wirets` 重新生成，再 `tsc -b` 看前端哪里要跟着改；文件过期时 server 的 `go test` 会失败。把记录转换成前端自己的形状只在 `lib/messageReducer.ts` 的 `normalizeEvent` 里做（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#the-clients-copy-is-generated)）。
+
+```bash
 # 本项目没有 lint / format 脚本，统一在仓库根目录执行（理由见根 AGENTS.md）
 pnpm -w run lint         # Lint 检查
 pnpm -w run format       # 格式化

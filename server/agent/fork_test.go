@@ -8,7 +8,7 @@ import (
 )
 
 // record builds one history line the way the store holds it.
-func record(t *testing.T, rec EventRecord) json.RawMessage {
+func record(t *testing.T, rec Record) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(rec)
 	if err != nil {
@@ -64,28 +64,28 @@ func TestForkSupportOf(t *testing.T) {
 func TestTruncateHistory(t *testing.T) {
 	tests := []struct {
 		name        string
-		records     []EventRecord
+		records     []Record
 		keepThrough int
 		want        []EventType
 	}{
 		{
 			name: "keeps a complete prefix untouched",
-			records: []EventRecord{
-				{Type: EventTypeMessage, Content: "hi"},
-				{Type: EventTypeToolCall, ToolUseID: "t1"},
-				{Type: EventTypeToolResult, ToolUseID: "t1"},
-				{Type: EventTypeDone},
-				{Type: EventTypeMessage, Content: "and again"},
+			records: []Record{
+				MessageRecord{Content: "hi"},
+				ToolCallRecord{ToolUseID: "t1"},
+				ToolResultRecord{ToolUseID: "t1"},
+				DoneRecord{},
+				MessageRecord{Content: "and again"},
 			},
 			keepThrough: 3,
 			want:        []EventType{EventTypeMessage, EventTypeToolCall, EventTypeToolResult, EventTypeDone},
 		},
 		{
 			name: "drops a tool call whose result is past the cut",
-			records: []EventRecord{
-				{Type: EventTypeText, Content: "let me look"},
-				{Type: EventTypeToolCall, ToolUseID: "t1"},
-				{Type: EventTypeToolResult, ToolUseID: "t1"},
+			records: []Record{
+				TextRecord{Content: "let me look"},
+				ToolCallRecord{ToolUseID: "t1"},
+				ToolResultRecord{ToolUseID: "t1"},
 			},
 			keepThrough: 1,
 			want:        []EventType{EventTypeText},
@@ -94,38 +94,38 @@ func TestTruncateHistory(t *testing.T) {
 			// Parallel calls settle out of order, so the dangling opener is not
 			// the last kept record.
 			name: "drops a dangling call from the middle of the prefix",
-			records: []EventRecord{
-				{Type: EventTypeToolCall, ToolUseID: "a"},
-				{Type: EventTypeToolCall, ToolUseID: "b"},
-				{Type: EventTypeToolResult, ToolUseID: "b"},
-				{Type: EventTypeToolResult, ToolUseID: "a"},
+			records: []Record{
+				ToolCallRecord{ToolUseID: "a"},
+				ToolCallRecord{ToolUseID: "b"},
+				ToolResultRecord{ToolUseID: "b"},
+				ToolResultRecord{ToolUseID: "a"},
 			},
 			keepThrough: 2,
 			want:        []EventType{EventTypeToolCall, EventTypeToolResult},
 		},
 		{
 			name: "drops an unanswered permission request",
-			records: []EventRecord{
-				{Type: EventTypePermissionRequest, RequestID: "r1"},
-				{Type: EventTypePermissionResponse, RequestID: "r1"},
+			records: []Record{
+				PermissionRequestRecord{RequestID: "r1"},
+				PermissionResponseRecord{RequestID: "r1"},
 			},
 			keepThrough: 0,
 			want:        nil,
 		},
 		{
 			name: "keeps an answered permission request",
-			records: []EventRecord{
-				{Type: EventTypePermissionRequest, RequestID: "r1"},
-				{Type: EventTypePermissionResponse, RequestID: "r1"},
-				{Type: EventTypeDone},
+			records: []Record{
+				PermissionRequestRecord{RequestID: "r1"},
+				PermissionResponseRecord{RequestID: "r1"},
+				DoneRecord{},
 			},
 			keepThrough: 1,
 			want:        []EventType{EventTypePermissionRequest, EventTypePermissionResponse},
 		},
 		{
 			name: "drops an unanswered question",
-			records: []EventRecord{
-				{Type: EventTypeAskUserQuestion, RequestID: "q1"},
+			records: []Record{
+				AskUserQuestionRecord{RequestID: "q1"},
 			},
 			keepThrough: 0,
 			want:        nil,
@@ -133,33 +133,42 @@ func TestTruncateHistory(t *testing.T) {
 		{
 			// A withdrawn prompt is settled: the source shows it that way too.
 			name: "keeps a cancelled request",
-			records: []EventRecord{
-				{Type: EventTypeAskUserQuestion, RequestID: "q1"},
-				{Type: EventTypeRequestCancelled, RequestID: "q1"},
+			records: []Record{
+				AskUserQuestionRecord{RequestID: "q1"},
+				RequestCancelledRecord{RequestID: "q1"},
 			},
 			keepThrough: 1,
 			want:        []EventType{EventTypeAskUserQuestion, EventTypeRequestCancelled},
 		},
 		{
+			name: "keeps a legacy question its legacy answer settled",
+			records: []Record{
+				AskUserQuestionRecord{RequestID: "q1"},
+				QuestionResponseRecord{RequestID: "q1", Answers: map[string]string{"Which?": "A"}},
+			},
+			keepThrough: 1,
+			want:        []EventType{EventTypeAskUserQuestion, EventTypeQuestionResponse},
+		},
+		{
 			// Its first run settled before the cut and the second after: kept,
 			// the call would read as running in a fork where nothing can end it.
 			name: "drops a resumed call whose second result is past the cut",
-			records: []EventRecord{
-				{Type: EventTypeToolCall, ToolUseID: "t1"},
-				{Type: EventTypeToolResult, ToolUseID: "t1"},
-				{Type: EventTypeToolCall, ToolUseID: "t1", Subtype: ToolCallResumed},
-				{Type: EventTypeToolResult, ToolUseID: "t1"},
+			records: []Record{
+				ToolCallRecord{ToolUseID: "t1"},
+				ToolResultRecord{ToolUseID: "t1"},
+				ToolCallRecord{ToolUseID: "t1", Subtype: ToolCallResumed},
+				ToolResultRecord{ToolUseID: "t1"},
 			},
 			keepThrough: 2,
 			want:        []EventType{EventTypeToolCall, EventTypeToolResult},
 		},
 		{
 			name: "keeps a resumed call that settled again before the cut",
-			records: []EventRecord{
-				{Type: EventTypeToolCall, ToolUseID: "t1"},
-				{Type: EventTypeToolResult, ToolUseID: "t1"},
-				{Type: EventTypeToolCall, ToolUseID: "t1", Subtype: ToolCallResumed},
-				{Type: EventTypeToolResult, ToolUseID: "t1"},
+			records: []Record{
+				ToolCallRecord{ToolUseID: "t1"},
+				ToolResultRecord{ToolUseID: "t1"},
+				ToolCallRecord{ToolUseID: "t1", Subtype: ToolCallResumed},
+				ToolResultRecord{ToolUseID: "t1"},
 			},
 			keepThrough: 3,
 			want:        []EventType{EventTypeToolCall, EventTypeToolResult, EventTypeToolCall, EventTypeToolResult},
@@ -168,8 +177,8 @@ func TestTruncateHistory(t *testing.T) {
 			// Nothing could have paired it before the fork either, so dropping it
 			// would remove history the source still shows.
 			name: "keeps an opener that has no ID to pair on",
-			records: []EventRecord{
-				{Type: EventTypeToolCall, ToolName: "Bash"},
+			records: []Record{
+				ToolCallRecord{ToolName: "Bash"},
 			},
 			keepThrough: 0,
 			want:        []EventType{EventTypeToolCall},
@@ -189,12 +198,12 @@ func TestTruncateHistory(t *testing.T) {
 				t.Fatalf("kept %d records, want %d: %s", len(got), len(tt.want), got)
 			}
 			for i, raw := range got {
-				var rec EventRecord
-				if err := json.Unmarshal(raw, &rec); err != nil {
+				rec, err := DecodeRecord(raw)
+				if err != nil {
 					t.Fatalf("record %d does not parse: %v", i, err)
 				}
-				if rec.Type != tt.want[i] {
-					t.Errorf("record %d is %q, want %q", i, rec.Type, tt.want[i])
+				if rec.Type() != tt.want[i] {
+					t.Errorf("record %d is %q, want %q", i, rec.Type(), tt.want[i])
 				}
 			}
 		})
@@ -206,7 +215,7 @@ func TestTruncateHistory(t *testing.T) {
 func TestTruncateHistoryKeepsUnparsableRecords(t *testing.T) {
 	records := []json.RawMessage{
 		json.RawMessage(`"not an event record"`),
-		record(t, EventRecord{Type: EventTypeDone}),
+		record(t, DoneRecord{}),
 	}
 
 	got := TruncateHistory(records, 1)
@@ -224,17 +233,17 @@ func TestTruncateHistoryKeepsUnparsableRecords(t *testing.T) {
 func TestHistoryActivatesSession(t *testing.T) {
 	tests := []struct {
 		name    string
-		records []EventRecord
+		records []Record
 		want    bool
 	}{
 		{
 			name:    "agent output activates",
-			records: []EventRecord{{Type: EventTypeMessage}, {Type: EventTypeText}},
+			records: []Record{MessageRecord{}, TextRecord{}},
 			want:    true,
 		},
 		{
 			name:    "a user message alone does not",
-			records: []EventRecord{{Type: EventTypeMessage}},
+			records: []Record{MessageRecord{}},
 			want:    false,
 		},
 		{

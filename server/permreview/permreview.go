@@ -39,11 +39,11 @@ import (
 )
 
 // MessageSubtype marks the system message that hands a reviewer a request.
-const MessageSubtype = "permission_review"
+const MessageSubtype agent.MessageSubtype = "permission_review"
 
 // NudgeSubtype marks the system message that reminds a reviewer of requests it
 // ended a turn without answering.
-const NudgeSubtype = "permission_review_nudge"
+const NudgeSubtype agent.MessageSubtype = "permission_review_nudge"
 
 // DefaultTimeout is how long a request waits for its reviewer's verdict before
 // Pockode denies it. Where the number comes from: a verdict is one short

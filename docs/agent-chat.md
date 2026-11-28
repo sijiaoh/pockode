@@ -436,7 +436,7 @@ the rest costs transport, parsing and memory for records nobody looks at.
   delivered twice is harmless.
 - `tool_progress` is the same snapshot for a subagent's live counters — the
   newest `subagent_progress` each subagent call in flight reported, keyed by
-  `tool_use_id` ([agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format)).
+  `tool_use_id` ([agent-integration.md](code/agent-integration.md#history-records-and-live-events)).
   Absent when none did.
 
 `chat.messages.history` needs no subscription and cannot collide with one. An
@@ -1081,7 +1081,7 @@ that covers half of one problem and adds a coordination problem is not a saving.
 
 ## Session Persistence
 
-Session metadata and chat history are stored under the session data directory. History is JSON Lines of `EventRecord`s appended on each event. Both agents record where their side of the conversation lives, and reopen it on the next launch. Claude keeps its provider-side session ID in `claude_resume.json` as soon as the CLI reports it, and falls back through a recovery ladder (plain resume → fork → new session) when a launch turns out to be unresumable, so a session cannot be permanently stuck by a first turn that failed ([code/agent-integration.md](code/agent-integration.md#session-recovery-ladder)). Codex keeps a thread id in `codex_resume.json` and reopens the thread from the rollout file the CLI wrote to disk; when that file is gone the session starts a new thread and says so ([code/agent-integration.md](code/agent-integration.md#thread-recovery)). Pockode's own transcript survives either way; what a resume decides is whether the *agent* still has the context.
+Session metadata and chat history are stored under the session data directory. History is JSON Lines of records (`agent.Record`) appended on each event. Both agents record where their side of the conversation lives, and reopen it on the next launch. Claude keeps its provider-side session ID in `claude_resume.json` as soon as the CLI reports it, and falls back through a recovery ladder (plain resume → fork → new session) when a launch turns out to be unresumable, so a session cannot be permanently stuck by a first turn that failed ([code/agent-integration.md](code/agent-integration.md#session-recovery-ladder)). Codex keeps a thread id in `codex_resume.json` and reopens the thread from the rollout file the CLI wrote to disk; when that file is gone the session starts a new thread and says so ([code/agent-integration.md](code/agent-integration.md#thread-recovery)). Pockode's own transcript survives either way; what a resume decides is whether the *agent* still has the context.
 
 A session can also be **forked**: `session.fork` starts a new session from a copy of the source's transcript, cut to the moment before the message the user picked — which keeps that message when the agent said it, and drops it when the user did, because the fork returns to before they sent it ([session-fork-ui.md](session-fork-ui.md#the-rule)). The source is left untouched. Whether the agent comes along is that agent's own declared answer, and it is a stronger question than resuming: both shipped agents can follow a fork to a chosen point inside a conversation — Claude to a message, Codex to a turn — and an agent that could not would have its forks refused rather than handing back a session whose agent has never seen the conversation filling its screen ([code/agent-integration.md](code/agent-integration.md#session-forking), UI in [session-fork-ui.md](session-fork-ui.md)).
 

@@ -2,7 +2,6 @@ package process
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -50,16 +49,16 @@ func startedTurn(t *testing.T, budgets session.LeaseBudgets) (*Manager, *mockAge
 	return m, mock, store, proc
 }
 
-func historyRecords(t *testing.T, store session.Store, sessionID string) []agent.EventRecord {
+func historyRecords(t *testing.T, store session.Store, sessionID string) []agent.Record {
 	t.Helper()
 	raw, err := store.GetHistory(context.Background(), sessionID)
 	if err != nil {
 		t.Fatalf("failed to read history: %v", err)
 	}
-	records := make([]agent.EventRecord, 0, len(raw))
+	records := make([]agent.Record, 0, len(raw))
 	for _, line := range raw {
-		var record agent.EventRecord
-		if err := json.Unmarshal(line, &record); err != nil {
+		record, err := agent.DecodeRecord(line)
+		if err != nil {
 			t.Fatalf("failed to decode a history record: %v", err)
 		}
 		records = append(records, record)
@@ -70,12 +69,12 @@ func historyRecords(t *testing.T, store session.Store, sessionID string) []agent
 // lastWarning returns the last warning in history, so a test can say
 // which explanation the user was given without depending on what else was
 // written around it.
-func lastWarning(t *testing.T, store session.Store, sessionID string) agent.EventRecord {
+func lastWarning(t *testing.T, store session.Store, sessionID string) agent.WarningRecord {
 	t.Helper()
-	var last agent.EventRecord
+	var last agent.WarningRecord
 	for _, record := range historyRecords(t, store, sessionID) {
-		if record.Type == agent.EventTypeWarning {
-			last = record
+		if warning, ok := record.(agent.WarningRecord); ok {
+			last = warning
 		}
 	}
 	return last
@@ -176,8 +175,8 @@ func expiryReasonFor(t *testing.T, store session.Store, requestID string) agent.
 	var reason agent.CancelReason
 	found := false
 	for _, record := range historyRecords(t, store, "sess-1") {
-		if record.Type == agent.EventTypeRequestCancelled && record.RequestID == requestID {
-			reason, found = record.Reason, true
+		if cancelled, ok := record.(agent.RequestCancelledRecord); ok && cancelled.RequestID == requestID {
+			reason, found = cancelled.Reason, true
 		}
 	}
 	if !found {
@@ -225,7 +224,7 @@ func TestLease_AsksOnce(t *testing.T) {
 	}
 	warnings := 0
 	for _, record := range historyRecords(t, store, "sess-1") {
-		if record.Type == agent.EventTypeWarning {
+		if record.Type() == agent.EventTypeWarning {
 			warnings++
 		}
 	}
@@ -385,7 +384,7 @@ func TestLease_NothingIsRecordedAfterTheStreamEnds(t *testing.T) {
 	proc.inject(agent.WarningEvent{Message: "too late", Code: "after_the_end"})
 
 	for _, record := range historyRecords(t, store, "sess-1") {
-		if record.Code == "after_the_end" {
+		if warning, ok := record.(agent.WarningRecord); ok && warning.Code == "after_the_end" {
 			t.Error("an expiry wrote into the transcript of a process that had already ended")
 		}
 	}

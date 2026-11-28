@@ -456,7 +456,7 @@ func (s *appSession) dropHeldSubagentResult(threadID string) {
 // rememberSubagent records which call spawned a subagent's thread, read off
 // the subAgentActivity item that reports the spawn, and draws that spawn as a
 // Task call — the row the child's records are filed under (see
-// agent.EventRecord.ParentToolUseID) and that settleSubagent closes. The item
+// agent.TextRecord.ParentToolUseID) and that settleSubagent closes. The item
 // arrives on the spawning thread before anything from the new one, and its id
 // is the id of the model's spawn call — the one thing that ties the two threads
 // together. Read from both item/started and item/completed, which carry the
@@ -630,7 +630,7 @@ type threadItem struct {
 
 	// FromSubagent marks an item of a subagent's thread rather than this
 	// session's, and ParentToolUseID names the call that spawned that thread
-	// when the spawn was seen. See agent.EventRecord.ParentToolUseID.
+	// when the spawn was seen. See agent.TextRecord.ParentToolUseID.
 	FromSubagent    bool   `json:"-"`
 	ParentToolUseID string `json:"-"`
 	// ThreadID is the thread the notification named, read off it like TurnID.

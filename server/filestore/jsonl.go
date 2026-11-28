@@ -18,7 +18,7 @@ import (
 // the writer would append history it then refuses to load back, and the loss
 // would surface much later, as "entries too large to load" on a session the
 // user reopens. Not equal to it but a megabyte past it: the record is the event
-// wrapped in EventRecord's own JSON, so it is the larger of the two by an
+// wrapped in its record's own JSON, so it is the larger of the two by an
 // envelope, and two equal ceilings would leave exactly that envelope of
 // payloads writable and unreadable. Not imported from there either — this
 // package sits under the agent layer, not beside it — so

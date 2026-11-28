@@ -92,7 +92,7 @@ var ErrForkUnsupported = errors.New("this session's agent does not support forki
 // and its withdrawal, are written here too and never pass through the process's
 // event stream, so this is the only way they reach an open chat before the next
 // reload.
-type EventBroadcastFunc func(sessionID string, record agent.EventRecord, seq session.HistorySeq, exclude any)
+type EventBroadcastFunc func(sessionID string, record agent.Record, seq session.HistorySeq, exclude any)
 
 // Client coordinates chat operations across session and process management.
 // It is the single entry point for programmatic chat interactions.
@@ -185,7 +185,7 @@ func (c *Client) SendHTMLActionExcluding(ctx context.Context, sessionID string, 
 // auto-continue, etc.). It is tagged with origin "system" plus a subtype and
 // optional meta so the frontend can fold it into the receiving work's progress
 // card rather than render it as a user bubble.
-func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error {
+func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content string, subtype agent.MessageSubtype, meta *agent.MessageMeta) error {
 	event := agent.MessageEvent{
 		Content: content,
 		Origin:  agent.MessageOriginSystem,
@@ -231,7 +231,7 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	event.ObservedAt = receivedAt
 
 	// Persist message to history
-	seq, err := c.store.AppendToHistory(ctx, sessionID, agent.NewEventRecord(event))
+	seq, err := c.store.AppendToHistory(ctx, sessionID, event.ToRecord())
 	if err != nil {
 		slog.Error("failed to persist message", "sessionId", sessionID, "error", err)
 		// The prompt still goes to the agent — it is worth answering whether or not
@@ -350,7 +350,7 @@ func (c *Client) processToDeliverTo(ctx context.Context, sessionID string, hasAt
 // turn is under way; losing the boundary costs the reader a bubble break on the
 // next reload, which is not worth failing a send that succeeded.
 func (c *Client) noteIngested(ctx context.Context, sessionID, messageID string) {
-	record := agent.NewEventRecord(agent.ObserveAt(agent.MessageIngestedEvent{MessageID: messageID}, time.Now()))
+	record := agent.ObserveAt(agent.MessageIngestedEvent{MessageID: messageID}, time.Now()).ToRecord()
 	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
 	if err != nil {
 		slog.Error("failed to persist the message read point", "sessionId", sessionID, "error", err)
@@ -372,10 +372,10 @@ func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, d
 	// Broadcast as well as stored: the client that answered has drawn its own
 	// press, but every other client watching the session has not, and kept a
 	// live card for an answered request until it reloaded.
-	record := agent.NewEventRecord(agent.ObserveAt(agent.PermissionResponseEvent{
+	record := agent.ObserveAt(agent.PermissionResponseEvent{
 		RequestID: data.RequestID,
-		Choice:    choiceToString(choice),
-	}, time.Now()))
+		Choice:    choice.Name(),
+	}, time.Now()).ToRecord()
 	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
 	if err != nil {
 		slog.Error("failed to persist permission response", "sessionId", sessionID, "error", err)
@@ -445,12 +445,12 @@ func (c *Client) answerForReview(ctx context.Context, proc *process.Process, dat
 		return err
 	}
 
-	record := agent.NewEventRecord(agent.ObserveAt(agent.PermissionResponseEvent{
+	record := agent.ObserveAt(agent.PermissionResponseEvent{
 		RequestID: data.RequestID,
-		Choice:    choiceToString(choice),
+		Choice:    choice.Name(),
 		By:        by,
 		Review:    &review,
-	}, time.Now()))
+	}, time.Now()).ToRecord()
 	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
 	if err != nil {
 		slog.Error("failed to persist permission response", "sessionId", sessionID, "by", by, "error", err)
@@ -465,7 +465,7 @@ func (c *Client) answerForReview(ctx context.Context, proc *process.Process, dat
 // for what went wrong outside the agent's own stream that the person reading
 // the session has to know.
 func (c *Client) RecordWarning(ctx context.Context, sessionID string, warning agent.WarningEvent) error {
-	record := agent.NewEventRecord(warning)
+	record := warning.ToRecord()
 	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
 	if err != nil {
 		return fmt.Errorf("record warning: %w", err)
@@ -618,7 +618,7 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 				source.AgentType.DisplayName()),
 			Code: "fork_agent_context_unavailable",
 		}
-		if _, err := c.store.AppendToHistory(ctx, newID, agent.NewEventRecord(warning)); err != nil {
+		if _, err := c.store.AppendToHistory(ctx, newID, warning.ToRecord()); err != nil {
 			slog.Error("failed to record that the fork has no agent context",
 				"sessionId", newID, "error", err)
 		}
@@ -677,17 +677,6 @@ func (c *Client) getOrCreateProcess(ctx context.Context, sessionID string) (*pro
 	return proc, nil
 }
 
-func choiceToString(choice agent.PermissionChoice) string {
-	switch choice {
-	case agent.PermissionAllow:
-		return "allow"
-	case agent.PermissionAlwaysAllow:
-		return "always_allow"
-	default:
-		return "deny"
-	}
-}
-
 // isUserMessageRecord reports whether a history record is a message that came
 // into the session from outside it, as opposed to one Pockode wrote itself.
 //
@@ -705,9 +694,10 @@ func choiceToString(choice agent.PermissionChoice) string {
 // such records as they are, and silently shortening the fork over a parse
 // failure would be the larger harm.
 func isUserMessageRecord(raw json.RawMessage) bool {
-	var rec agent.EventRecord
-	if err := json.Unmarshal(raw, &rec); err != nil {
+	rec, err := agent.DecodeRecord(raw)
+	if err != nil {
 		return false
 	}
-	return rec.Type == agent.EventTypeMessage && rec.Origin != agent.MessageOriginSystem
+	message, ok := rec.(agent.MessageRecord)
+	return ok && message.Origin != agent.MessageOriginSystem
 }

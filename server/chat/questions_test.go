@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -19,7 +18,7 @@ type questionFixture struct {
 	store      session.Store
 	client     *Client
 	agent      *mockAgent
-	broadcasts []agent.EventRecord
+	broadcasts []agent.Record
 	// settled is every call QuestionsSettledFunc received, in order.
 	settled [][]agent.SettledQuestion
 }
@@ -40,7 +39,7 @@ func newQuestionFixture(t *testing.T) *questionFixture {
 	}
 
 	f := &questionFixture{store: store, client: NewClient(store, pm), agent: ag}
-	f.client.SetBroadcaster(func(_ string, record agent.EventRecord, _ session.HistorySeq, _ any) {
+	f.client.SetBroadcaster(func(_ string, record agent.Record, _ session.HistorySeq, _ any) {
 		f.broadcasts = append(f.broadcasts, record)
 	})
 	f.client.SetOnQuestionsSettled(func(sessionID string, settled []agent.SettledQuestion) {
@@ -74,21 +73,22 @@ func (f *questionFixture) unanswered(t *testing.T) []session.PendingQuestion {
 	return meta.Turn.Unanswered
 }
 
-func (f *questionFixture) records(t *testing.T) []agent.EventRecord {
+func (f *questionFixture) records(t *testing.T) []agent.Record {
 	t.Helper()
-	raw, err := f.store.GetHistory(context.Background(), "sess")
-	if err != nil {
-		t.Fatalf("GetHistory: %v", err)
-	}
-	out := make([]agent.EventRecord, 0, len(raw))
-	for _, r := range raw {
-		var rec agent.EventRecord
-		if err := json.Unmarshal(r, &rec); err != nil {
-			t.Fatalf("unmarshal record: %v", err)
+	return sessionRecords(t, f.store, "sess")
+}
+
+// lastMessage is the transcript's last message record; the zero one if there
+// is none.
+func (f *questionFixture) lastMessage(t *testing.T) agent.MessageRecord {
+	t.Helper()
+	var message agent.MessageRecord
+	for _, rec := range f.records(t) {
+		if m, ok := rec.(agent.MessageRecord); ok {
+			message = m
 		}
-		out = append(out, rec)
 	}
-	return out
+	return message
 }
 
 // waitFor spins until cond holds. Events reach the store on the process's own
@@ -131,19 +131,20 @@ func TestPostQuestion_RecordsAndWaits(t *testing.T) {
 	}
 
 	records := f.records(t)
-	if len(records) != 1 || records[0].Type != agent.EventTypeQuestionPosted {
+	if len(records) != 1 || records[0].Type() != agent.EventTypeQuestionPosted {
 		t.Fatalf("records = %+v, want one question_posted", records)
 	}
-	if records[0].RequestID != id {
-		t.Errorf("record request_id = %q, want %q", records[0].RequestID, id)
+	posted := recordAs[agent.QuestionPostedRecord](t, records[0])
+	if posted.RequestID != id {
+		t.Errorf("record request_id = %q, want %q", posted.RequestID, id)
 	}
 	// One question per record, which is what gives "decline this one" a subject.
-	if len(records[0].Questions) != 1 {
-		t.Fatalf("record questions = %d, want exactly one", len(records[0].Questions))
+	if len(posted.Questions) != 1 {
+		t.Fatalf("record questions = %d, want exactly one", len(posted.Questions))
 	}
 	// The asker's own pick is part of the question: the card drawn from the
 	// record and the panel drawn from the state both show it.
-	if opts := records[0].Questions[0].Options; len(opts) != 2 || !opts[0].Recommended || opts[1].Recommended {
+	if opts := posted.Questions[0].Options; len(opts) != 2 || !opts[0].Recommended || opts[1].Recommended {
 		t.Errorf("record options = %+v, want the recommendation kept", opts)
 	}
 	if opts := pending[0].Options; len(opts) != 2 || !opts[0].Recommended || opts[1].Recommended {
@@ -155,7 +156,7 @@ func TestPostQuestion_RecordsAndWaits(t *testing.T) {
 	if got := len(f.agent.sessions); got != 0 {
 		t.Errorf("agent sessions started = %d, want none", got)
 	}
-	if len(f.broadcasts) != 1 || f.broadcasts[0].Type != agent.EventTypeQuestionPosted {
+	if len(f.broadcasts) != 1 || f.broadcasts[0].Type() != agent.EventTypeQuestionPosted {
 		t.Errorf("broadcasts = %+v, want the card pushed to open chats", f.broadcasts)
 	}
 }
@@ -204,9 +205,11 @@ func TestPostQuestions_ABatchIsQuestionsOfTheirOwn(t *testing.T) {
 			len(pending), len(records), len(f.broadcasts))
 	}
 	for i, q := range posted {
-		if pending[i].RequestID != q.RequestID || records[i].RequestID != q.RequestID || f.broadcasts[i].RequestID != q.RequestID {
+		record := recordAs[agent.QuestionPostedRecord](t, records[i])
+		broadcast := recordAs[agent.QuestionPostedRecord](t, f.broadcasts[i])
+		if pending[i].RequestID != q.RequestID || record.RequestID != q.RequestID || broadcast.RequestID != q.RequestID {
 			t.Errorf("position %d: unanswered %s, record %s, broadcast %s; want %s (%s) — asking order",
-				i, pending[i].RequestID, records[i].RequestID, f.broadcasts[i].RequestID, q.RequestID, q.Header)
+				i, pending[i].RequestID, record.RequestID, broadcast.RequestID, q.RequestID, q.Header)
 		}
 	}
 }
@@ -269,9 +272,9 @@ func TestCancelQuestion_WithdrawsWithoutTellingTheAgent(t *testing.T) {
 	}
 
 	records := f.records(t)
-	last := records[len(records)-1]
-	if last.Type != agent.EventTypeRequestCancelled || last.RequestID != id {
-		t.Errorf("last record = %+v, want the withdrawal", last)
+	last, ok := records[len(records)-1].(agent.RequestCancelledRecord)
+	if !ok || last.RequestID != id {
+		t.Errorf("last record = %+v, want the withdrawal", records[len(records)-1])
 	}
 	if last.ResolvedAt == nil || last.ResolvedAt.IsZero() {
 		t.Error("resolved_at is absent, want the moment of the withdrawal")
@@ -325,7 +328,7 @@ func TestWithdrawQuestions_TakesBackEverything(t *testing.T) {
 	}
 	withdrawals := 0
 	for _, rec := range f.records(t) {
-		if rec.Type == agent.EventTypeRequestCancelled {
+		if rec, ok := rec.(agent.RequestCancelledRecord); ok {
 			withdrawals++
 			if rec.Reason != agent.ReasonWorkClosed {
 				t.Errorf("reason = %q, want work_closed", rec.Reason)
@@ -366,9 +369,9 @@ func TestSendAnswers_DeliversAndClears(t *testing.T) {
 	}
 
 	records := f.records(t)
-	last := records[len(records)-1]
-	if last.Type != agent.EventTypeMessage || len(last.Answering) != 2 {
-		t.Fatalf("last record = %+v, want the message carrying both answers", last)
+	last, ok := records[len(records)-1].(agent.MessageRecord)
+	if !ok || len(last.Answering) != 2 {
+		t.Fatalf("last record = %+v, want the message carrying both answers", records[len(records)-1])
 	}
 	// The question travels with the answer: the card may be thousands of
 	// records back, outside every page the bubble will ever have.
@@ -743,11 +746,15 @@ func lastAnswering(t *testing.T, f *questionFixture, requestID string) agent.Que
 		t.Fatalf("GetHistory: %v", err)
 	}
 	for i := len(records) - 1; i >= 0; i-- {
-		var rec agent.EventRecord
-		if err := json.Unmarshal(records[i], &rec); err != nil {
+		rec, err := agent.DecodeRecord(records[i])
+		if err != nil {
 			continue
 		}
-		for _, a := range rec.Answering {
+		message, ok := rec.(agent.MessageRecord)
+		if !ok {
+			continue
+		}
+		for _, a := range message.Answering {
 			if a.RequestID == requestID {
 				return a
 			}
@@ -889,12 +896,7 @@ func TestAnswerQuestion_RecordsWhoAnsweredAndMarksTheMessage(t *testing.T) {
 		t.Errorf("answers = %q, want the label it picked", answering.Answers)
 	}
 
-	var message agent.EventRecord
-	for _, rec := range f.records(t) {
-		if rec.Type == agent.EventTypeMessage {
-			message = rec
-		}
-	}
+	message := f.lastMessage(t)
 	if message.Origin != agent.MessageOriginAgent {
 		t.Errorf("origin = %q, want %q", message.Origin, agent.MessageOriginAgent)
 	}
@@ -917,12 +919,7 @@ func TestSendAnswers_RecordsTheUserAsTheAnswerer(t *testing.T) {
 		t.Fatalf("resolved_by = %+v, want the user", answering.ResolvedBy)
 	}
 
-	var message agent.EventRecord
-	for _, rec := range f.records(t) {
-		if rec.Type == agent.EventTypeMessage {
-			message = rec
-		}
-	}
+	message := f.lastMessage(t)
 	// Unmarked, as every message a person sends is.
 	if message.Origin != "" {
 		t.Errorf("origin = %q, want a user message to carry none", message.Origin)
@@ -994,13 +991,13 @@ func TestDescribeResolution_ARecordWithNoResolverIsTheUsers(t *testing.T) {
 
 	// The shape a build before this field wrote: an answering entry with no
 	// resolved_by, and the question off the list.
-	legacy := agent.NewEventRecord(agent.MessageEvent{
+	legacy := agent.MessageEvent{
 		Content: "Answering:\n\nQ: Which database?\nA: Postgres",
 		Answering: []agent.QuestionAnswer{{
 			RequestID: id, Header: "Database", Question: "Which database?",
 			Answers: []string{"Postgres"}, AnsweredAt: time.Now(),
 		}},
-	})
+	}.ToRecord()
 	if _, err := f.store.AppendToHistory(context.Background(), "sess", legacy); err != nil {
 		t.Fatalf("AppendToHistory: %v", err)
 	}
@@ -1111,7 +1108,7 @@ func TestSendAnswers_DiscardedAnswerReopensTheQuestion(t *testing.T) {
 	// The transcript is left as it was: the answer was sent, and the discard
 	// is its own record.
 	for _, rec := range f.records(t) {
-		if rec.Type == agent.EventTypeRequestCancelled {
+		if rec.Type() == agent.EventTypeRequestCancelled {
 			t.Errorf("history has %+v, want nothing written about the question itself", rec)
 		}
 	}

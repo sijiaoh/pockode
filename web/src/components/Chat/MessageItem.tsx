@@ -43,6 +43,7 @@ import type {
 	ContentPart,
 	ExpiryReason,
 	Message,
+	MessageSubtype,
 	PermissionAnswerer,
 	PermissionRequest,
 	PermissionReview,
@@ -167,7 +168,7 @@ interface WorkEventItemProps {
 	/** The message's, naming its body in full screen. */
 	id: string;
 	content: string;
-	subtype?: string;
+	subtype?: MessageSubtype;
 	meta?: SystemMessageMeta;
 	onOpenWorkDetail?: (workId: string) => void;
 	/** A Stop threw this message away before the agent read it. */
@@ -1507,7 +1508,7 @@ const MessageItem = memo(function MessageItem({
 					<ReviewerEventItem
 						id={message.id}
 						content={message.content}
-						subtype={message.subtype ?? ""}
+						subtype={message.subtype}
 						discarded={isDiscarded}
 					/>
 				);

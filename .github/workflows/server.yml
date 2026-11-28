@@ -5,11 +5,17 @@ on:
     branches: [main]
     paths:
       - "server/**"
+      # Generated from server/ and checked by its tests (uncached, see below), so a
+      # hand edit is caught.
+      - "web/src/types/wire.generated.ts"
       - ".github/workflows/server.yml"
   pull_request:
     branches: [main]
     paths:
       - "server/**"
+      # Generated from server/ and checked by its tests (uncached, see below), so a
+      # hand edit is caught.
+      - "web/src/types/wire.generated.ts"
       - ".github/workflows/server.yml"
   workflow_dispatch:
 
@@ -53,6 +59,13 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      # Uncached: setup-go restores the test cache, and the cache does not watch
+      # this test's file, which is outside the module, so a hand edit of it
+      # alone would replay an old pass.
+      - name: Check generated web types
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -count=1 -run '^TestGeneratedFileIsCurrent$' ./agent/wirets
 
       # Verbose, and with the skips listed at the end. A matrix leg that goes
       # green because every platform-specific test skipped itself is worse than

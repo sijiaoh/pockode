@@ -32,8 +32,8 @@ func TestRetire_CancelsThePromptsNobodyWillAnswer(t *testing.T) {
 
 	cancelled := map[string]agent.CancelReason{}
 	for _, record := range historyRecords(t, store, "sess-1") {
-		if record.Type == agent.EventTypeRequestCancelled {
-			cancelled[record.RequestID] = record.Reason
+		if rec, ok := record.(agent.RequestCancelledRecord); ok {
+			cancelled[rec.RequestID] = rec.Reason
 		}
 	}
 	for _, requestID := range []string{"req-1", "req-2"} {
@@ -97,7 +97,7 @@ func cancellationsFor(t *testing.T, store session.Store, requestID string) int {
 	t.Helper()
 	count := 0
 	for _, record := range historyRecords(t, store, "sess-1") {
-		if record.Type == agent.EventTypeRequestCancelled && record.RequestID == requestID {
+		if rec, ok := record.(agent.RequestCancelledRecord); ok && rec.RequestID == requestID {
 			count++
 		}
 	}

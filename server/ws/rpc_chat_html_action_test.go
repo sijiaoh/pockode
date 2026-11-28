@@ -54,11 +54,15 @@ func TestChatHTMLAction_SendsTheActionAsAUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rec agent.EventRecord
-	if err := json.Unmarshal(records[0], &rec); err != nil {
+	decoded, err := agent.DecodeRecord(records[0])
+	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Type != agent.EventTypeMessage || rec.Origin != "" || rec.Content != wantContent || rec.MessageID != result.MessageID {
+	rec, ok := decoded.(agent.MessageRecord)
+	if !ok {
+		t.Fatalf("records[0] = %T, want a message", decoded)
+	}
+	if rec.Origin != "" || rec.Content != wantContent || rec.MessageID != result.MessageID {
 		t.Errorf("record = %+v", rec)
 	}
 	if a := rec.HTMLAction; a == nil || a.Page != "p1" || a.Action != "approve" {
@@ -200,11 +204,11 @@ func TestChatHTMLAction_RefusedWhileAPermissionIsOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, raw := range records {
-		var rec agent.EventRecord
-		if err := json.Unmarshal(raw, &rec); err != nil {
+		rec, err := agent.DecodeRecord(raw)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if rec.HTMLAction != nil {
+		if message, ok := rec.(agent.MessageRecord); ok && message.HTMLAction != nil {
 			t.Errorf("a refused action was recorded: %+v", rec)
 		}
 	}

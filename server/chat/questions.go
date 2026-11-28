@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -137,7 +136,7 @@ func (c *Client) postQuestion(ctx context.Context, sessionID string, spec Questi
 		AskedAt:     now,
 	}
 
-	record := agent.NewEventRecord(agent.QuestionPostedEvent{
+	record := agent.QuestionPostedEvent{
 		RequestID: q.RequestID,
 		Question: agent.AskUserQuestion{
 			Question:    q.Question,
@@ -146,7 +145,7 @@ func (c *Client) postQuestion(ctx context.Context, sessionID string, spec Questi
 			MultiSelect: q.MultiSelect,
 		},
 		AskedAt: now,
-	})
+	}.ToRecord()
 	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
 	if err != nil {
 		// Refused rather than degraded, unlike a message: a message is worth
@@ -234,9 +233,9 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 	}
 
 	now := time.Now()
-	record := agent.NewEventRecord(agent.RequestCancelledEvent{
+	record := agent.RequestCancelledEvent{
 		RequestID: requestID, Reason: reason, At: now,
-	})
+	}.ToRecord()
 	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
 	if err != nil {
 		return session.PendingQuestion{}, fmt.Errorf("record withdrawal: %w", err)
@@ -620,12 +619,12 @@ func (c *Client) readResolutions(ctx context.Context, sessionID string, requestI
 
 	// Backwards: the newest account of a request is the one that holds.
 	for i := len(records) - 1; i >= 0 && len(wanted) > 0; i-- {
-		var rec agent.EventRecord
-		if err := json.Unmarshal(records[i], &rec); err != nil {
+		rec, err := agent.DecodeRecord(records[i])
+		if err != nil {
 			continue
 		}
-		switch rec.Type {
-		case agent.EventTypeMessage:
+		switch rec := rec.(type) {
+		case agent.MessageRecord:
 			for _, a := range rec.Answering {
 				if _, want := wanted[a.RequestID]; !want {
 					continue
@@ -637,7 +636,7 @@ func (c *Client) readResolutions(ctx context.Context, sessionID string, requestI
 				out[a.RequestID] = resolution{Kind: kind, By: a.ResolvedBy.Describe(), At: a.AnsweredAt}
 				delete(wanted, a.RequestID)
 			}
-		case agent.EventTypeRequestCancelled:
+		case agent.RequestCancelledRecord:
 			if _, want := wanted[rec.RequestID]; !want {
 				continue
 			}
@@ -652,7 +651,7 @@ func (c *Client) readResolutions(ctx context.Context, sessionID string, requestI
 	return out
 }
 
-func (c *Client) broadcastRecord(sessionID string, record agent.EventRecord, seq session.HistorySeq) {
+func (c *Client) broadcastRecord(sessionID string, record agent.Record, seq session.HistorySeq) {
 	if c.broadcast != nil {
 		c.broadcast(sessionID, record, seq, nil)
 	}

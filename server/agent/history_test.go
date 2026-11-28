@@ -40,7 +40,16 @@ func TestObserveAt(t *testing.T) {
 		MessageIngestedEvent{MessageID: "msg-1"},
 	}
 	for _, event := range stamped {
-		rec := NewEventRecord(ObserveAt(event, at))
+		// Read back from the JSON: the stamp lives on a different record type
+		// for each of these, and the line is what a client measures from.
+		var rec struct {
+			Type       EventType  `json:"type"`
+			Subtype    string     `json:"subtype"`
+			ObservedAt *time.Time `json:"observed_at"`
+		}
+		if err := json.Unmarshal(recordJSON(t, ObserveAt(event, at)), &rec); err != nil {
+			t.Fatal(err)
+		}
 		if rec.ObservedAt == nil || !rec.ObservedAt.Equal(at) {
 			t.Errorf("%s %q: observed_at = %v, want %v", rec.Type, rec.Subtype, rec.ObservedAt, at)
 		}
@@ -61,12 +70,16 @@ func TestObserveAt(t *testing.T) {
 
 // Every record written before the field existed has none, and has to read back
 // and go out again exactly as it was stored.
-func TestEventRecord_WithoutObservedAtRoundTrips(t *testing.T) {
+func TestToolCallRecord_WithoutObservedAtRoundTrips(t *testing.T) {
 	old := `{"type":"tool_call","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"call-1"}`
 
-	var rec EventRecord
-	if err := json.Unmarshal([]byte(old), &rec); err != nil {
+	decoded, err := DecodeRecord([]byte(old))
+	if err != nil {
 		t.Fatal(err)
+	}
+	rec, ok := decoded.(ToolCallRecord)
+	if !ok {
+		t.Fatalf("decoded as %T, want ToolCallRecord", decoded)
 	}
 	if rec.ObservedAt != nil {
 		t.Fatalf("observed_at = %v, want none", rec.ObservedAt)
@@ -82,7 +95,7 @@ func TestEventRecord_WithoutObservedAtRoundTrips(t *testing.T) {
 
 // A subagent that made no tool calls made 0 of them, which a record has to keep
 // saying; one written before the field existed says nothing and still loads.
-func TestEventRecord_SubagentReportRoundTrips(t *testing.T) {
+func TestToolResultRecord_SubagentReportRoundTrips(t *testing.T) {
 	zero := int64(0)
 	event := ToolResultEvent{ToolUseID: "call-1", Subagent: &SubagentReport{AgentID: "a1", SubagentCounts: SubagentCounts{ToolUses: &zero}}}
 	raw, err := json.Marshal(event.ToRecord())
@@ -93,9 +106,13 @@ func TestEventRecord_SubagentReportRoundTrips(t *testing.T) {
 		t.Fatalf("record = %s, want the zero count kept and the absent one omitted", raw)
 	}
 
-	var old EventRecord
-	if err := json.Unmarshal([]byte(`{"type":"tool_result","tool_use_id":"call-1","tool_result":"ok","duration_ms":12}`), &old); err != nil {
+	decoded, err := DecodeRecord([]byte(`{"type":"tool_result","tool_use_id":"call-1","tool_result":"ok","duration_ms":12}`))
+	if err != nil {
 		t.Fatal(err)
+	}
+	old, ok := decoded.(ToolResultRecord)
+	if !ok {
+		t.Fatalf("decoded as %T, want ToolResultRecord", decoded)
 	}
 	if old.Subagent != nil {
 		t.Errorf("an old record grew a report: %#v", old.Subagent)

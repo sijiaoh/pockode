@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -52,7 +51,7 @@ type forkFixture struct {
 // newForkFixture registers ag for claude sessions; a nil ag registers the plain
 // mockAgent, which implements no agent.SessionForker and so cannot be forked at
 // all.
-func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.EventRecord) forkFixture {
+func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.Record) forkFixture {
 	t.Helper()
 
 	dataDir := t.TempDir()
@@ -97,21 +96,9 @@ func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.EventRecord)
 	return forkFixture{store: store, client: NewClient(store, pm), seqs: seqs, dataDir: dataDir}
 }
 
-func forkedHistory(t *testing.T, store session.Store, sessionID string) []agent.EventRecord {
+func forkedHistory(t *testing.T, store session.Store, sessionID string) []agent.Record {
 	t.Helper()
-
-	raw, err := store.GetHistory(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("GetHistory: %v", err)
-	}
-
-	records := make([]agent.EventRecord, len(raw))
-	for i, line := range raw {
-		if err := json.Unmarshal(line, &records[i]); err != nil {
-			t.Fatalf("record %d does not parse: %v", i, err)
-		}
-	}
-	return records
+	return sessionRecords(t, store, sessionID)
 }
 
 // TestFork_CopiesConversationAndMeta is the contract a fork is for: a separate
@@ -119,12 +106,12 @@ func forkedHistory(t *testing.T, store session.Store, sessionID string) []agent.
 // — agent, mode, model and effort — with nothing after the fork point carried
 // over.
 func TestFork_CopiesConversationAndMeta(t *testing.T) {
-	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "first"},
-		{Type: agent.EventTypeText, Content: "answering first"},
-		{Type: agent.EventTypeDone},
-		{Type: agent.EventTypeMessage, Content: "second"},
-		{Type: agent.EventTypeText, Content: "answering second"},
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.Record{
+		agent.MessageRecord{Content: "first"},
+		agent.TextRecord{Content: "answering first"},
+		agent.DoneRecord{},
+		agent.MessageRecord{Content: "second"},
+		agent.TextRecord{Content: "answering second"},
 	})
 
 	meta, err := f.client.Fork(context.Background(), "source", f.seqs[2], "")
@@ -161,12 +148,12 @@ func TestFork_CopiesConversationAndMeta(t *testing.T) {
 		t.Fatalf("copied %d records, want %d: %+v", len(got), len(want), got)
 	}
 	for i, rec := range got {
-		if rec.Type != want[i] {
-			t.Errorf("record %d is %q, want %q", i, rec.Type, want[i])
+		if rec.Type() != want[i] {
+			t.Errorf("record %d is %q, want %q", i, rec.Type(), want[i])
 		}
 	}
-	if got[1].Content != "answering first" {
-		t.Errorf("record 1 content = %q, want the source's", got[1].Content)
+	if text := recordAs[agent.TextRecord](t, got[1]); text.Content != "answering first" {
+		t.Errorf("record 1 content = %q, want the source's", text.Content)
 	}
 
 	if meta.ForkedFrom == nil || meta.ForkedFrom.SessionID != "source" {
@@ -197,12 +184,12 @@ func TestFork_HandsTheAgentTheCutHistory(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ag := &forkingAgent{carried: true}
-			f := newForkFixture(t, ag, []agent.EventRecord{
-				{Type: agent.EventTypeMessage, Content: "first"},
-				{Type: agent.EventTypeText, Content: "answering first"},
-				{Type: agent.EventTypeDone},
-				{Type: agent.EventTypeMessage, Content: "second"},
-				{Type: agent.EventTypeText, Content: "answering second"},
+			f := newForkFixture(t, ag, []agent.Record{
+				agent.MessageRecord{Content: "first"},
+				agent.TextRecord{Content: "answering first"},
+				agent.DoneRecord{},
+				agent.MessageRecord{Content: "second"},
+				agent.TextRecord{Content: "answering second"},
 			})
 
 			meta, err := f.client.Fork(context.Background(), "source", f.seqs[tt.anchor], "")
@@ -230,11 +217,11 @@ func TestFork_HandsTheAgentTheCutHistory(t *testing.T) {
 // stops at its own previous message either way. Keeping the prompt would show a
 // last message the agent does not have, which is the mismatch this drops.
 func TestFork_UserMessageAnchorStopsBeforeIt(t *testing.T) {
-	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "first", Origin: agent.MessageOriginUser},
-		{Type: agent.EventTypeText, Content: "answering first"},
-		{Type: agent.EventTypeDone},
-		{Type: agent.EventTypeMessage, Content: "second", Origin: agent.MessageOriginUser},
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.Record{
+		agent.MessageRecord{Content: "first", Origin: agent.MessageOriginUser},
+		agent.TextRecord{Content: "answering first"},
+		agent.DoneRecord{},
+		agent.MessageRecord{Content: "second", Origin: agent.MessageOriginUser},
 	})
 
 	meta, err := f.client.Fork(context.Background(), "source", f.seqs[3], "")
@@ -248,10 +235,10 @@ func TestFork_UserMessageAnchorStopsBeforeIt(t *testing.T) {
 		t.Fatalf("copied %d records, want %d: %+v", len(got), len(want), got)
 	}
 	for i, rec := range got {
-		if rec.Type != want[i] {
-			t.Errorf("record %d is %q, want %q", i, rec.Type, want[i])
+		if rec.Type() != want[i] {
+			t.Errorf("record %d is %q, want %q", i, rec.Type(), want[i])
 		}
-		if rec.Content == "second" {
+		if m, ok := rec.(agent.MessageRecord); ok && m.Content == "second" {
 			t.Errorf("record %d carried the anchor message the fork returns to before", i)
 		}
 	}
@@ -263,11 +250,11 @@ func TestFork_UserMessageAnchorStopsBeforeIt(t *testing.T) {
 // server decides this from the record's origin rather than trusting a client not
 // to anchor on one.
 func TestFork_SystemMessageAnchorIsKept(t *testing.T) {
-	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "first", Origin: agent.MessageOriginUser},
-		{Type: agent.EventTypeText, Content: "answering first"},
-		{Type: agent.EventTypeDone},
-		{Type: agent.EventTypeMessage, Content: "step 2 started", Origin: agent.MessageOriginSystem},
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.Record{
+		agent.MessageRecord{Content: "first", Origin: agent.MessageOriginUser},
+		agent.TextRecord{Content: "answering first"},
+		agent.DoneRecord{},
+		agent.MessageRecord{Content: "step 2 started", Origin: agent.MessageOriginSystem},
 	})
 
 	meta, err := f.client.Fork(context.Background(), "source", f.seqs[3], "")
@@ -279,8 +266,8 @@ func TestFork_SystemMessageAnchorIsKept(t *testing.T) {
 	if len(got) != 4 {
 		t.Fatalf("copied %d records, want all 4: %+v", len(got), got)
 	}
-	if got[3].Content != "step 2 started" {
-		t.Errorf("last record = %q, want the system message the anchor named", got[3].Content)
+	if m := recordAs[agent.MessageRecord](t, got[3]); m.Content != "step 2 started" {
+		t.Errorf("last record = %q, want the system message the anchor named", m.Content)
 	}
 }
 
@@ -290,9 +277,9 @@ func TestFork_SystemMessageAnchorIsKept(t *testing.T) {
 // its context *this time* — one that cannot be forked at all never gets here
 // (TestFork_RefusedWhenTheAgentCannotBeForked).
 func TestFork_WarnsWhenTheAgentWillNotRemember(t *testing.T) {
-	f := newForkFixture(t, &forkingAgent{carried: false}, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "first"},
-		{Type: agent.EventTypeText, Content: "answering first"},
+	f := newForkFixture(t, &forkingAgent{carried: false}, []agent.Record{
+		agent.MessageRecord{Content: "first"},
+		agent.TextRecord{Content: "answering first"},
 	})
 
 	meta, err := f.client.Fork(context.Background(), "source", f.seqs[1], "")
@@ -301,9 +288,9 @@ func TestFork_WarnsWhenTheAgentWillNotRemember(t *testing.T) {
 	}
 
 	history := forkedHistory(t, f.store, meta.ID)
-	last := history[len(history)-1]
-	if last.Type != agent.EventTypeWarning {
-		t.Fatalf("history ends with %q, want a warning: %+v", last.Type, history)
+	last, ok := history[len(history)-1].(agent.WarningRecord)
+	if !ok {
+		t.Fatalf("history ends with %q, want a warning: %+v", history[len(history)-1].Type(), history)
 	}
 	if last.Code != "fork_agent_context_unavailable" {
 		t.Errorf("warning code = %q, want fork_agent_context_unavailable", last.Code)
@@ -323,9 +310,9 @@ func TestFork_WarnsWhenTheAgentWillNotRemember(t *testing.T) {
 // Asked of the capability, not of a particular agent: whichever agent reads as
 // agent.ForkUnsupported is the one this applies to.
 func TestFork_RefusedWhenTheAgentCannotBeForked(t *testing.T) {
-	f := newForkFixture(t, nil, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "first"},
-		{Type: agent.EventTypeText, Content: "answering first"},
+	f := newForkFixture(t, nil, []agent.Record{
+		agent.MessageRecord{Content: "first"},
+		agent.TextRecord{Content: "answering first"},
 	})
 
 	_, err := f.client.Fork(context.Background(), "source", f.seqs[1], "")
@@ -352,10 +339,10 @@ func TestFork_RefusedWhenTheAgentCannotBeForked(t *testing.T) {
 // either way, and the agent says per fork what it could carry. Only
 // ForkUnsupported closes the door.
 func TestFork_OfferedWhateverTheAnchorWhenTheAgentCanFork(t *testing.T) {
-	f := newForkFixture(t, &forkingAgent{}, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "first"},
-		{Type: agent.EventTypeText, Content: "answering first"},
-		{Type: agent.EventTypeMessage, Content: "second"},
+	f := newForkFixture(t, &forkingAgent{}, []agent.Record{
+		agent.MessageRecord{Content: "first"},
+		agent.TextRecord{Content: "answering first"},
+		agent.MessageRecord{Content: "second"},
 	})
 
 	if _, err := f.client.Fork(context.Background(), "source", f.seqs[1], ""); err != nil {
@@ -367,9 +354,9 @@ func TestFork_OfferedWhateverTheAnchorWhenTheAgentCanFork(t *testing.T) {
 // across has nothing to warn about, and a warning there would train the user to
 // ignore the one that matters.
 func TestFork_SaysNothingWhenTheAgentRemembers(t *testing.T) {
-	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "first"},
-		{Type: agent.EventTypeText, Content: "answering first"},
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.Record{
+		agent.MessageRecord{Content: "first"},
+		agent.TextRecord{Content: "answering first"},
 	})
 
 	meta, err := f.client.Fork(context.Background(), "source", f.seqs[1], "")
@@ -378,8 +365,8 @@ func TestFork_SaysNothingWhenTheAgentRemembers(t *testing.T) {
 	}
 
 	for _, rec := range forkedHistory(t, f.store, meta.ID) {
-		if rec.Type == agent.EventTypeWarning {
-			t.Errorf("history holds a warning it should not: %q", rec.Message)
+		if warning, ok := rec.(agent.WarningRecord); ok {
+			t.Errorf("history holds a warning it should not: %q", warning.Message)
 		}
 	}
 }
@@ -387,9 +374,9 @@ func TestFork_SaysNothingWhenTheAgentRemembers(t *testing.T) {
 // TestFork_AgentFailureLeavesNoSession: a session wearing the source's title with
 // half a fork inside it is worse than no session at all.
 func TestFork_AgentFailureLeavesNoSession(t *testing.T) {
-	f := newForkFixture(t, &forkingAgent{err: errors.New("no transcript to fork")}, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "first"},
-		{Type: agent.EventTypeText, Content: "answering first"},
+	f := newForkFixture(t, &forkingAgent{err: errors.New("no transcript to fork")}, []agent.Record{
+		agent.MessageRecord{Content: "first"},
+		agent.TextRecord{Content: "answering first"},
 	})
 
 	if _, err := f.client.Fork(context.Background(), "source", f.seqs[1], ""); err == nil {
@@ -408,7 +395,7 @@ func TestFork_AgentFailureLeavesNoSession(t *testing.T) {
 // TestFork_RejectedRequests covers the states a fork cannot be made from. Each
 // error has to name what was wrong: the client shows it to the user as-is.
 func TestFork_RejectedRequests(t *testing.T) {
-	history := []agent.EventRecord{{Type: agent.EventTypeMessage, Content: "first"}}
+	history := []agent.Record{agent.MessageRecord{Content: "first"}}
 
 	tests := []struct {
 		name      string
@@ -451,11 +438,11 @@ func TestFork_RejectedRequests(t *testing.T) {
 // writes next, and the source is left untouched.
 func TestFork_WhileSourceIsRunning(t *testing.T) {
 	ag := &forkingAgent{carried: true}
-	f := newForkFixture(t, ag, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "first"},
-		{Type: agent.EventTypeText, Content: "answering first"},
-		{Type: agent.EventTypeDone},
-		{Type: agent.EventTypeMessage, Content: "second"},
+	f := newForkFixture(t, ag, []agent.Record{
+		agent.MessageRecord{Content: "first"},
+		agent.TextRecord{Content: "answering first"},
+		agent.DoneRecord{},
+		agent.MessageRecord{Content: "second"},
 	})
 
 	proc, _, err := f.client.pm.GetOrCreateProcess(context.Background(), session.SessionMeta{
@@ -482,8 +469,8 @@ func TestFork_WhileSourceIsRunning(t *testing.T) {
 		t.Fatalf("copied %d records, want %d: %+v", len(got), len(want), got)
 	}
 	for i, rec := range got {
-		if rec.Type != want[i] {
-			t.Errorf("record %d is %q, want %q", i, rec.Type, want[i])
+		if rec.Type() != want[i] {
+			t.Errorf("record %d is %q, want %q", i, rec.Type(), want[i])
 		}
 	}
 
@@ -501,16 +488,17 @@ func TestFork_WhileSourceIsRunning(t *testing.T) {
 }
 
 // TestFork_AnchorNamesTheRecordTheClientSaw is the reason the anchor is a
-// server-issued sequence number and not a count. Answering a permission request
-// appends a record that is never broadcast, so a client counting what it received
-// would be one short from then on and would silently cut in the wrong place.
+// server-issued sequence number and not a count. Not every record reaches every
+// client as a notification — the tab that sent a message is left out of its
+// broadcast — so a client counting what it received would be one short from then
+// on and would silently cut in the wrong place.
 func TestFork_AnchorNamesTheRecordTheClientSaw(t *testing.T) {
-	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "first"},
-		{Type: agent.EventTypePermissionRequest, RequestID: "r1"},
-		{Type: agent.EventTypePermissionResponse, RequestID: "r1"}, // stored, never broadcast
-		{Type: agent.EventTypeText, Content: "the record the user anchors on"},
-		{Type: agent.EventTypeDone},
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.Record{
+		agent.MessageRecord{Content: "first"},
+		agent.PermissionRequestRecord{RequestID: "r1"},
+		agent.PermissionResponseRecord{RequestID: "r1"},
+		agent.TextRecord{Content: "the record the user anchors on"},
+		agent.DoneRecord{},
 	})
 
 	anchor := f.seqs[3]
@@ -521,7 +509,7 @@ func TestFork_AnchorNamesTheRecordTheClientSaw(t *testing.T) {
 
 	history := forkedHistory(t, f.store, meta.ID)
 	last := history[len(history)-1]
-	if last.Content != "the record the user anchors on" {
+	if text, ok := last.(agent.TextRecord); !ok || text.Content != "the record the user anchors on" {
 		t.Errorf("fork ends at %+v, want the anchored record", last)
 	}
 	if len(history) != 4 {
@@ -532,9 +520,9 @@ func TestFork_AnchorNamesTheRecordTheClientSaw(t *testing.T) {
 // TestFork_UsesTheGivenTitle: the user names the fork in the sheet before
 // confirming, so it is not created under the parent's name and renamed after.
 func TestFork_UsesTheGivenTitle(t *testing.T) {
-	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "first"},
-		{Type: agent.EventTypeText, Content: "answering first"},
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.Record{
+		agent.MessageRecord{Content: "first"},
+		agent.TextRecord{Content: "answering first"},
 	})
 
 	meta, err := f.client.Fork(context.Background(), "source", f.seqs[1], "Try the other approach")
@@ -555,23 +543,23 @@ func TestFork_UsesTheGivenTitle(t *testing.T) {
 // records leave open — with its request id unchanged, so answering it in the
 // fork names the same question the card in the fork's transcript shows.
 func TestFork_InheritsTheQuestionsOpenAtTheCut(t *testing.T) {
-	asked := func(id string) agent.EventRecord {
-		return agent.NewEventRecord(agent.QuestionPostedEvent{
+	asked := func(id string) agent.Record {
+		return agent.QuestionPostedEvent{
 			RequestID: id,
 			Question:  agent.AskUserQuestion{Header: id, Question: "Which " + id + "?"},
 			AskedAt:   time.Unix(1700000000, 0).UTC(),
-		})
+		}.ToRecord()
 	}
 
-	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "go"},
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.Record{
+		agent.MessageRecord{Content: "go"},
 		asked("req-1"),
 		asked("req-2"),
-		agent.NewEventRecord(agent.MessageEvent{
+		agent.MessageEvent{
 			Content:   "Answering req-1",
 			Answering: []agent.QuestionAnswer{{RequestID: "req-1", Answers: []string{"yes"}}},
-		}),
-		{Type: agent.EventTypeText, Content: "carrying on"},
+		}.ToRecord(),
+		agent.TextRecord{Content: "carrying on"},
 		asked("req-3"),
 	})
 
@@ -614,16 +602,16 @@ func TestFork_InheritsTheQuestionsOpenAtTheCut(t *testing.T) {
 // A fork has the pages its copied history drew and none the source drew after
 // the cut, and numbers its next page past every page the source had.
 func TestFork_CopiesThePagesDrawnBeforeTheCut(t *testing.T) {
-	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
-		{Type: agent.EventTypeMessage, Content: "draw"},
-		{Type: agent.EventTypeToolCall, ToolUseID: "c1", ToolName: "mcp__pockode__html_render"},
-		{Type: agent.EventTypeToolResult, ToolUseID: "c1", HTMLPage: "p1"},
-		{Type: agent.EventTypeToolCall, ToolUseID: "c2", ToolName: "mcp__pockode__html_render"},
-		{Type: agent.EventTypeToolResult, ToolUseID: "c2", HTMLPage: "p2"},
-		{Type: agent.EventTypeDone},
-		{Type: agent.EventTypeMessage, Content: "again"},
-		{Type: agent.EventTypeToolCall, ToolUseID: "c3", ToolName: "mcp__pockode__html_render"},
-		{Type: agent.EventTypeToolResult, ToolUseID: "c3", HTMLPage: "p3"},
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.Record{
+		agent.MessageRecord{Content: "draw"},
+		agent.ToolCallRecord{ToolUseID: "c1", ToolName: "mcp__pockode__html_render"},
+		agent.ToolResultRecord{ToolUseID: "c1", HTMLPage: "p1"},
+		agent.ToolCallRecord{ToolUseID: "c2", ToolName: "mcp__pockode__html_render"},
+		agent.ToolResultRecord{ToolUseID: "c2", HTMLPage: "p2"},
+		agent.DoneRecord{},
+		agent.MessageRecord{Content: "again"},
+		agent.ToolCallRecord{ToolUseID: "c3", ToolName: "mcp__pockode__html_render"},
+		agent.ToolResultRecord{ToolUseID: "c3", HTMLPage: "p3"},
 	})
 	pages := htmlpage.NewStore()
 	for _, title := range []string{"one", "two", "three"} {

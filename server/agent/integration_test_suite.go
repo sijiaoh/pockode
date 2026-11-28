@@ -1099,8 +1099,8 @@ const (
 // things, and passing them positionally is a transposition away from an
 // assertion that reads well and checks something else.
 type midTurnReadPoints struct {
-	// records counts the events so far that history keeps
-	// (EventType.Persisted), so that the two indices below are positions in the
+	// records counts the events so far that history keeps (those that encode
+	// as a Record), so that the two indices below are positions in the
 	// stream a client replays rather than in the live one. The two differ by the
 	// events nothing records, and a boundary that held in only one of them would
 	// give a reloading tab a different transcript from the one that watched the
@@ -1195,7 +1195,7 @@ func testMidTurnMessage(t *testing.T, a Agent) {
 			RequireEventFields(t, event)
 
 			record := -1
-			if event.EventType().Persisted() {
+			if _, persisted := event.Encode().(Record); persisted {
 				record = cut.records
 				cut.records++
 			}
@@ -1283,7 +1283,7 @@ func (c midTurnReadPoints) check(t *testing.T, reportsIngest bool) {
 		// when it is not: a boundary history does not keep is a boundary a
 		// reloading client never sees, and -1 sorts before every real record.
 		t.Fatalf("the read point arrived as an event history does not keep, so the split exists only for the tab "+
-			"that watched the turn (EventType.Persisted for %s)", EventTypeMessageIngested)
+			"that watched the turn (%s did not encode as a Record)", EventTypeMessageIngested)
 	}
 	if c.marker < 0 {
 		// The turn-level miss is already reported at the ending; nothing to add.

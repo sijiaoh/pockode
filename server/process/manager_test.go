@@ -610,7 +610,7 @@ func TestProcess_OnlyContentEndsABackgroundWait(t *testing.T) {
 // agent.MarkAfterTurn.
 func TestTurnInputFor_BackgroundSettlementIsNotOutput(t *testing.T) {
 	tests := []struct {
-		subtype string
+		subtype agent.ToolResultSubtype
 		want    session.TurnSignal
 	}{
 		{"", session.SignalOutput},
@@ -1066,10 +1066,10 @@ func TestManager_Shutdown_PersistsWhatTheStreamDrains(t *testing.T) {
 	sess.emit(t, agent.ProcessEndedEvent{})
 	m.Shutdown()
 
-	countTypes := func(records []agent.EventRecord) map[agent.EventType]int {
+	countTypes := func(records []agent.Record) map[agent.EventType]int {
 		counts := make(map[agent.EventType]int)
 		for _, r := range records {
-			counts[r.Type]++
+			counts[r.Type()]++
 		}
 		return counts
 	}

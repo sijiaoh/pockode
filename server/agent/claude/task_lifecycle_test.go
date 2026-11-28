@@ -246,7 +246,7 @@ func TestParseAssistantEvent_FetchCarriesTheCallItReads(t *testing.T) {
 		t.Errorf("fetch resolved to %q, want the call that started the task", call.OriginToolUseID)
 	}
 
-	if got := agent.NewEventRecord(call).OriginToolUseID; got != "toolu_bg" {
+	if got := call.ToRecord().OriginToolUseID; got != "toolu_bg" {
 		t.Errorf("record carries %q, want the join to be persisted", got)
 	}
 }

@@ -276,7 +276,7 @@ func (f *fixture) raise(t *testing.T, request agent.PermissionRequestEvent) {
 func (f *fixture) requestRecords(t *testing.T, requestID string) int {
 	t.Helper()
 	n := 0
-	for _, rec := range f.records(t, "main", agent.EventTypePermissionRequest) {
+	for _, rec := range recordsOf[agent.PermissionRequestRecord](t, f, "main") {
 		if rec.RequestID == requestID {
 			n++
 		}
@@ -327,21 +327,21 @@ func (f *fixture) reviewID(t *testing.T, reviewerID, requestID string) string {
 	return ""
 }
 
-// records is every record of type typ in sessionID's history.
-func (f *fixture) records(t *testing.T, sessionID string, typ agent.EventType) []agent.EventRecord {
+// recordsOf is every record of type R in sessionID's history.
+func recordsOf[R agent.Record](t *testing.T, f *fixture, sessionID string) []R {
 	t.Helper()
 	history, err := f.store.GetHistory(context.Background(), sessionID)
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
-	var out []agent.EventRecord
+	var out []R
 	for _, raw := range history {
-		var rec agent.EventRecord
-		if err := json.Unmarshal(raw, &rec); err != nil {
-			t.Fatalf("unmarshal: %v", err)
+		rec, err := agent.DecodeRecord(raw)
+		if err != nil {
+			t.Fatalf("decode: %v", err)
 		}
-		if rec.Type == typ {
-			out = append(out, rec)
+		if r, ok := rec.(R); ok {
+			out = append(out, r)
 		}
 	}
 	return out
@@ -354,7 +354,7 @@ func (f *fixture) records(t *testing.T, sessionID string, typ agent.EventType) [
 func (f *fixture) waitForResponse(t *testing.T, sessionID string) {
 	t.Helper()
 	waitFor(t, "the permission response to be recorded", func() bool {
-		return len(f.records(t, sessionID, agent.EventTypePermissionResponse)) > 0
+		return len(recordsOf[agent.PermissionResponseRecord](t, f, sessionID)) > 0
 	})
 }
 
@@ -368,7 +368,7 @@ func (f *fixture) wantAutoDeny(t *testing.T, requestID, reviewerID string, kind 
 	if len(answers) != 1 || !strings.HasPrefix(answers[0], "deny:"+requestID+":Pockode denied this call: ") {
 		t.Errorf("main CLI got %q, want Pockode's deny of %s", answers, requestID)
 	}
-	responses := f.records(t, "main", agent.EventTypePermissionResponse)
+	responses := recordsOf[agent.PermissionResponseRecord](t, f, "main")
 	if len(responses) != 1 {
 		t.Fatalf("%d permission responses, want 1", len(responses))
 	}
@@ -492,7 +492,7 @@ func TestRoute_HandsBackARequestItCannotDecideOn(t *testing.T) {
 	f.raise(t, bashRequest("req-1", "a"))
 
 	waitFor(t, "the warning", func() bool {
-		for _, w := range f.records(t, "main", agent.EventTypeWarning) {
+		for _, w := range recordsOf[agent.WarningRecord](t, f, "main") {
 			if w.Code == "permission_review_failed" {
 				return true
 			}
@@ -625,14 +625,9 @@ func TestVerdict_Allow(t *testing.T) {
 	if answers := f.mainSession(t).sentAnswers(); len(answers) != 1 || answers[0] != "allow:req-1" {
 		t.Errorf("main CLI got %q", answers)
 	}
-	history, _ := f.store.GetHistory(context.Background(), "main")
-	var response agent.EventRecord
-	for _, raw := range history {
-		var rec agent.EventRecord
-		_ = json.Unmarshal(raw, &rec)
-		if rec.Type == agent.EventTypePermissionResponse {
-			response = rec
-		}
+	var response agent.PermissionResponseRecord
+	if responses := recordsOf[agent.PermissionResponseRecord](t, f, "main"); len(responses) > 0 {
+		response = responses[len(responses)-1]
 	}
 	if response.By != agent.RespondedByPermissionReviewer || response.Review == nil || response.Review.Category != "" {
 		t.Errorf("recorded response = %+v", response)
@@ -759,7 +754,7 @@ func TestTurnEnded_NudgesThenDenies(t *testing.T) {
 	if got := len(reviewer.sentPrompts()); got != MaxNudges+1 {
 		t.Errorf("reviewer has %d prompts, want no nudge past the limit", got)
 	}
-	warnings := f.records(t, reviewerID, agent.EventTypeWarning)
+	warnings := recordsOf[agent.WarningRecord](t, f, reviewerID)
 	if len(warnings) != 1 || !strings.Contains(warnings[0].Message, id) {
 		t.Errorf("reviewer warnings = %+v, want one naming %s", warnings, id)
 	}
@@ -931,7 +926,7 @@ func TestRoute_DeniesTheReviewersOwnRequest(t *testing.T) {
 	if len(answers) != 1 || !strings.HasPrefix(answers[0], "deny:own-1:Pockode denied this call: ") {
 		t.Errorf("reviewer CLI got %q", answers)
 	}
-	responses := f.records(t, reviewerID, agent.EventTypePermissionResponse)
+	responses := recordsOf[agent.PermissionResponseRecord](t, f, reviewerID)
 	if len(responses) != 1 || responses[0].By != agent.RespondedByPockode || responses[0].Review == nil ||
 		responses[0].Review.Automatic != agent.AutoDenyReviewerRequest || responses[0].Review.SessionID != reviewerID {
 		t.Errorf("reviewer's responses = %+v", responses)

@@ -34,9 +34,13 @@ func TestProcess_StoredAndBroadcastRecordsCarryTheSameObservedAt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stored agent.EventRecord
-	if err := json.Unmarshal(records[0], &stored); err != nil {
+	decoded, err := agent.DecodeRecord(records[0])
+	if err != nil {
 		t.Fatal(err)
+	}
+	stored, ok := decoded.(agent.ToolCallRecord)
+	if !ok {
+		t.Fatalf("records[0] = %T, want a tool call", decoded)
 	}
 	if stored.ObservedAt == nil || stored.ObservedAt.Before(before) || stored.ObservedAt.After(after) {
 		t.Fatalf("stored observed_at = %v, want between %v and %v", stored.ObservedAt, before, after)
@@ -44,11 +48,11 @@ func TestProcess_StoredAndBroadcastRecordsCarryTheSameObservedAt(t *testing.T) {
 
 	// The broadcast follows the append, so history having the record does not
 	// mean the listener has heard of it yet.
-	var broadcast *agent.EventRecord
+	var broadcast *agent.ToolCallRecord
 	deadline := time.Now().Add(5 * time.Second)
 	for broadcast == nil {
 		for _, msg := range rec.snapshot() {
-			if r := msg.Event.ToRecord(); r.Type == agent.EventTypeToolCall {
+			if r, ok := msg.Event.Encode().(agent.ToolCallRecord); ok {
 				broadcast = &r
 			}
 		}

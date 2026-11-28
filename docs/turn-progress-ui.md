@@ -911,7 +911,7 @@ the plan:
 
 Exactly one of `tool_use_id` and `plan_id` is set. A plan with nothing in it
 (an empty `TodoWrite`, a fold whose every task was deleted) is still a record,
-and carries no `steps` field at all, like every empty `EventRecord` field; the
+and carries no `steps` field at all, like every empty record field; the
 client reads it as `steps ?? []`. `provider_message_id` is there so a fork
 anchor on a plan is the same as its neighbours': the result frame's uuid on
 Claude, as its `tool_result` has, and the `turnId` on Codex's main thread, as

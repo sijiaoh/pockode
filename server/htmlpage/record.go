@@ -49,7 +49,7 @@ func IDFromResult(result string) (string, bool) {
 }
 
 // HighestInRecords is the highest page number any of records names in its
-// html_page field (agent.EventRecord.HTMLPage), 0 when none does. A fork
+// html_page field (agent.ToolResultRecord.HTMLPage), 0 when none does. A fork
 // copies the pages up to it (Clone).
 func HighestInRecords(records []json.RawMessage) int {
 	highest := 0

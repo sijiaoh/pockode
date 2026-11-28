@@ -18,6 +18,41 @@ const (
 	PermissionAlwaysAllow                         // Allow and persist for future requests
 )
 
+// PermissionChoiceName is a PermissionChoice as a permission_response record
+// and the chat.permission_response request spell it.
+type PermissionChoiceName string
+
+const (
+	ChoiceNameDeny        PermissionChoiceName = "deny"
+	ChoiceNameAllow       PermissionChoiceName = "allow"
+	ChoiceNameAlwaysAllow PermissionChoiceName = "always_allow"
+)
+
+// Name is how c is written down.
+func (c PermissionChoice) Name() PermissionChoiceName {
+	switch c {
+	case PermissionAllow:
+		return ChoiceNameAllow
+	case PermissionAlwaysAllow:
+		return ChoiceNameAlwaysAllow
+	default:
+		return ChoiceNameDeny
+	}
+}
+
+// ParsePermissionChoice reads a written choice back; anything it does not
+// name is a deny, so a garbled answer never lets a call run.
+func ParsePermissionChoice(name string) PermissionChoice {
+	switch PermissionChoiceName(name) {
+	case ChoiceNameAllow:
+		return PermissionAllow
+	case ChoiceNameAlwaysAllow:
+		return PermissionAlwaysAllow
+	default:
+		return PermissionDeny
+	}
+}
+
 // PermissionRequestData contains the data needed to send a permission response.
 type PermissionRequestData struct {
 	RequestID             string

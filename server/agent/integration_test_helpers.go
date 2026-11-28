@@ -76,7 +76,7 @@ func TurnOn(t *testing.T, ctx context.Context, sess Session, prompt string) Prom
 			if !ok {
 				t.Fatal("channel closed before done event")
 			}
-			raw, err := json.Marshal(NewEventRecord(event))
+			raw, err := json.Marshal(event.Encode())
 			if err != nil {
 				t.Fatalf("marshal record: %v", err)
 			}

@@ -81,7 +81,7 @@ of it that already shipped.
 | Result | `tool_result` block on a `user` message | `item/completed` |
 | Failure | `tool_result.is_error` | item `status` ∈ `inProgress`/`completed`/`failed`/`declined` |
 | Duration | for a subagent, `WebFetch` and `WebSearch` only, in the frame's `tool_use_result` | `durationMs` on `commandExecution`, `mcpToolCall`, `dynamicToolCall` |
-| Exit code | in the result text: a failed `Bash`'s first line, `Exit code N`, which the adapter parses into `exit_code` ([how](code/agent-integration.md#eventrecord-unified-event-format)) | `exitCode` on `commandExecution` |
+| Exit code | in the result text: a failed `Bash`'s first line, `Exit code N`, which the adapter parses into `exit_code` ([how](code/agent-integration.md#history-records-and-live-events)) | `exitCode` on `commandExecution` |
 | Parsed intent | — | `commandActions[]`: `read` / `listFiles` / `search` / `unknown`, each with the sub-command and its path or query |
 
 Both engines announce a call and then report on it, so "a call with no result is
@@ -352,7 +352,7 @@ each with a reason:
   that only has to be kept in sync.
 - **No permission field.** It stays its own part, with its own lifetime and its
   own buttons.
-- **No status field on `EventRecord`.** Every input to the derivation above is a
+- **No status field on any record.** Every input to the derivation above is a
   record the client already has.
 
 ### Observed times and reported durations
@@ -362,7 +362,7 @@ neither can be mistaken for the other:
 
 - **`durationMs` is what the engine reported** — codex on commands and MCP
   calls, Claude for a subagent, `WebFetch`, `WebSearch` and a backgrounded
-  task's outcome ([agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format)
+  task's outcome ([agent-integration.md](code/agent-integration.md#history-records-and-live-events)
   has which keys, and why each is read only for its own tool). It is the
   engine timing its own work.
 - **`startedAt` / `endedAt` are what Pockode observed** — the `observed_at` the
@@ -486,7 +486,7 @@ executor's result prose (`Created task "…" (ID: …)`) — and no input carrie
 title.
 
 So the server stamps the result, exactly as it stamps a page tool's result with
-its page ([`HTMLPage`](agent-event.md#eventrecord-serialization),
+its page ([`HTMLPage`](agent-event.md#records-serialization),
 `process.pageCalls`): a `workCalls` beside it notes a Pockode work tool's
 `tool_call` by name, and when its result arrives successful, writes
 `work_ref: {id, type, title}` onto the `tool_result` before it is recorded or
@@ -549,25 +549,24 @@ transcript becomes a lie the moment the next one arrives — the same argument t
 keeps token usage out of the stream
 ([agent-event.md](agent-event.md#what-is-not-an-event)).
 
-That needed a fourth predicate beside the three `EventType` already answered, and
-**a new event type now has to answer all four**:
+That needed a fourth question beside the three predicates `EventType` already
+answered, and **a new event type now has to answer all four**:
 
-| Predicate | `tool_activity` | Why |
+| Question | `tool_activity` | Why |
 |---|---|---|
-| `Persisted` | **false** | see above |
+| Persisted (encodes as an `agent.Record`, not an `agent.LiveEvent`) | **false** | see above |
 | `AwaitsUserInput` | false | nothing is blocked on the user |
 | `IndicatesAgentActivity` | true | it only ever arrives while a call is live |
 | `ActivatesSession` | false | it is the CLI reporting, not the agent contributing |
 
-**`Persisted` is a denylist while the other three are allowlists**, and the
-asymmetry is deliberate rather than an oversight to be tidied up. The other three
-are allowlists because of what a wrong inclusion costs on the expensive side:
-`AwaitsUserInput` and `ActivatesSession` confiscate the user's escape hatch or
-end a wait that is not over, and nothing downstream corrects either
+**Persisted has no default at all, while the other three are allowlists.** The
+three are allowlists because of what a wrong inclusion costs on the expensive
+side: `AwaitsUserInput` and `ActivatesSession` confiscate the user's escape hatch
+or end a wait that is not over, and nothing downstream corrects either
 ([code/agent-integration.md](code/agent-integration.md#what-an-event-says-about-process-state)).
-Here the default is the safe one: an event says what was true at one moment and
-that stays true, so a new type nobody thought about is recorded. The cost of
-forgetting is one stored record nobody reads, not a hole in history.
+Persisted is decided by the type the event encodes as, so a new event type
+cannot be written without choosing — and recording is the choice to reach for:
+an event says what was true at one moment, and that stays true.
 
 `IndicatesAgentActivity` being true says the turn is alive without saying the
 agent contributed anything to it, which is exactly what a progress line is. It
@@ -632,7 +631,7 @@ which is which.
 
 `output_file` is a path on the server's machine, which is what `FileBlock.Path`
 already describes — display, and an offer to open it in the Files tab when it is
-under the work directory ([agent-event.md](agent-event.md#eventrecord-serialization)).
+under the work directory ([agent-event.md](agent-event.md#records-serialization)).
 It is not read into an attachment: a background task's log can be arbitrarily
 large, and the user asked to see the outcome, not to have the log pushed at them.
 

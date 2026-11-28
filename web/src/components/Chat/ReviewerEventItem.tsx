@@ -5,6 +5,7 @@ import {
 	nudgePendingCount,
 	PERMISSION_REVIEW_SUBTYPE,
 	parseReviewRequest,
+	type ReviewerEventSubtype,
 } from "../../lib/reviewerTranscript";
 import { outputLineCount } from "../../lib/textLines";
 import { toolSummary, toolSummaryLine } from "../../lib/toolSummary";
@@ -16,8 +17,7 @@ interface Props {
 	/** The message's, naming its body in full screen. */
 	id: string;
 	content: string;
-	/** `permission_review` or `permission_review_nudge`. */
-	subtype: string;
+	subtype: ReviewerEventSubtype;
 	/** A Stop threw this message away before the reviewer read it. */
 	discarded?: boolean;
 }

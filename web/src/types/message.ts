@@ -1,6 +1,7 @@
 import type { AppAuthCredentialParams } from "../lib/loginTicket";
 import type { ContentBlock, FileBlock } from "./content";
 import type { AgentType } from "./settings";
+import type * as Wire from "./wire.generated";
 import type { WorkType } from "./work";
 
 /** The modes this build knows, and the only ones it ever sends. */
@@ -152,7 +153,7 @@ export type ToolRunStatus =
 	| "error"
 	| "interrupted";
 
-export type PlanStepStatus = "pending" | "in_progress" | "completed";
+export type PlanStepStatus = Wire.PlanStepStatus;
 
 /** One item of a plan the agent wrote (docs/turn-progress-ui.md#46-the-plan-record). */
 export interface PlanStep {
@@ -458,11 +459,7 @@ export interface ToolRunPermission {
  * answer for a reason the server cannot name. The banner then says what is true
  * of all of them rather than guessing.
  */
-export type ExpiryReason =
-	| "process_ended"
-	| "timeout"
-	| "work_closed"
-	| "step_done";
+export type ExpiryReason = Wire.CancelReason;
 
 export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
 
@@ -472,10 +469,7 @@ export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
  * through. Absent is a person. A newer server may name one this build does not
  * know; it is kept as sent (docs/agent-event.md#permission-requests-and-their-answers).
  */
-export type PermissionAnswerer =
-	| "permission_reviewer"
-	| "pockode"
-	| (string & {});
+export type PermissionAnswerer = Wire.PermissionResponder | (string & {});
 
 /** The `review` of a `permission_response` a reviewer or Pockode gave. */
 export interface PermissionReview {
@@ -662,7 +656,7 @@ export type ContentPart = { id: string } & (
  * the system line would read as Pockode's own annotation. Who answered is on
  * the answer itself (`QuestionAnswerRecord.resolved_by`).
  */
-export type MessageOrigin = "user" | "system" | "agent";
+export type MessageOrigin = Wire.MessageOrigin;
 
 /**
  * The account the CLI that produced a record ran as: the cliprofile id, `""`
@@ -686,52 +680,18 @@ export interface RecordedAccount {
 	profileId?: RecordedProfileId;
 }
 
-/** A record's mark that the CLI was refused for its credentials. */
-export interface AuthFailureRecord {
-	agent: string;
-	profile_id?: RecordedProfileId;
-}
+/**
+ * Summary data for a system-origin message, used to render it without parsing
+ * the prompt body.
+ */
+export type SystemMessageMeta = Wire.MessageMeta;
 
-/** A record's mark that the CLI's account hit its usage limit. */
-export interface UsageLimitRecord {
-	agent: string;
-	profile_id?: RecordedProfileId;
-}
-
-export interface SystemMessageStep {
-	current: number;
-	total: number;
-}
-
-export interface SystemMessageChild {
-	id: string;
-	title: string;
-}
-
-export interface SystemMessageStory {
-	id: string;
-	title: string;
-}
-
-// Summary data for a system-origin message, used to render it without parsing
-// the prompt body. Mirrors agent.MessageMeta on the server.
-export interface SystemMessageMeta {
-	/**
-	 * The work whose session received this message. Absent on history recorded
-	 * before it was sent, which then offers no way into the work's detail view.
-	 */
-	work_id?: string;
-	work_type?: WorkType;
-	title?: string;
-	/**
-	 * Where the work stood when this message was sent. A historical fact: it is
-	 * what this event's own wording says, never the work's current position.
-	 */
-	step?: SystemMessageStep;
-	child?: SystemMessageChild;
-	/** The story a watched_story_* message reports on. */
-	story?: SystemMessageStory;
-}
+/**
+ * Which prompt a system-origin message is: one of the server's
+ * `agent.MessageSubtype` values, or one a newer server added, which is drawn
+ * as a plain system message.
+ */
+export type MessageSubtype = Wire.MessageSubtype | (string & {});
 
 export interface UserMessage {
 	id: string;
@@ -758,7 +718,7 @@ export interface UserMessage {
 	messageId?: string;
 	// Present only for system-driven messages; absent means a user-typed message.
 	source?: MessageOrigin;
-	subtype?: string;
+	subtype?: MessageSubtype;
 	meta?: SystemMessageMeta;
 	/**
 	 * The posted questions this message answers, when it answers any. The bubble
@@ -988,22 +948,7 @@ export interface PendingQuestion {
 	asked_at: string;
 }
 
-/**
- * Who answered a question (`QuestionAnswerRecord.resolved_by`).
- *
- * `work_id` and `title` are the *answering* work, copied into the record for
- * the same reason the header and the question are: the reader is a bubble in
- * someone else's transcript, and that work is not one it can look up. Both are
- * absent for a user, and for an agent running in a session no work owns.
- * `session_id` is the answering agent's session; the server reads it, nothing
- * here does.
- */
-export interface QuestionResolver {
-	kind: "user" | "agent";
-	work_id?: string;
-	title?: string;
-	session_id?: string;
-}
+export type QuestionResolver = Wire.QuestionResolver;
 
 /**
  * One question a message answered, as the message record carries it.
@@ -1013,40 +958,7 @@ export interface QuestionResolver {
  * card that asked may be thousands of records back — outside every page this
  * client will ever load.
  */
-export interface QuestionAnswerRecord {
-	request_id: string;
-	header?: string;
-	question?: string;
-	/**
-	 * The option labels picked, and only ever labels the question offered. Empty
-	 * when the user answered in their own words, and when declined.
-	 */
-	answers?: string[];
-	/**
-	 * What the user wrote themselves: the whole answer to a question that offered
-	 * no options, or the **Other** beside ones it did.
-	 *
-	 * Apart from `answers` because the agent has to be able to tell them apart —
-	 * a label is its own word handed back, this is the user's. That is also why
-	 * the server checks one against the question and never the other.
-	 */
-	text?: string;
-	declined?: boolean;
-	/**
-	 * The optional line beside the answer: the reason beside a decline, or a
-	 * remark beside the options picked. Never on a question that offered no
-	 * options, nor beside **Other** on a single-select one — there the answer is
-	 * already the answerer's own words, and a note would read as a second one.
-	 */
-	note?: string;
-	/**
-	 * Who gave this answer. Absent on records written before an agent could
-	 * answer at all, which were all the user's — so absent reads as the user,
-	 * and every record written now says which it is outright.
-	 */
-	resolved_by?: QuestionResolver;
-	answered_at: string;
-}
+export type QuestionAnswerRecord = Wire.QuestionAnswer;
 
 /**
  * One question answered by a `chat.message`, as the client states it.
@@ -1246,13 +1158,7 @@ export interface MessageResult {
  * `message` record's `html_action`. An event — what was pressed on which
  * page — never state.
  */
-export interface HtmlAction {
-	/** The card's id (`p3`), filled in by the app, never by the page. */
-	page: string;
-	action: string;
-	/** Any JSON; `{}` when the page sent none. */
-	data: unknown;
-}
+export type HtmlAction = Wire.Action;
 
 export interface HtmlActionParams {
 	session_id: string;
@@ -1273,7 +1179,7 @@ export interface PermissionResponseParams {
 	tool_use_id: string;
 	tool_input: unknown;
 	permission_suggestions?: PermissionUpdate[];
-	choice: "deny" | "allow" | "always_allow";
+	choice: Wire.PermissionChoiceName;
 }
 
 export interface SessionDeleteParams {
@@ -1544,24 +1450,7 @@ export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
 	 * call's `tool_use_id`, for the reason `tool_activity` is here. Absent when
 	 * none did.
 	 */
-	tool_progress?: Record<string, SubagentProgressRecord>;
-}
-
-/** `SubagentCounts` on the wire. */
-export interface SubagentCountsRecord {
-	tool_uses?: number;
-	total_tokens?: number;
-}
-
-/** `SubagentReport` on the wire: a `tool_result` record's `subagent`. */
-export interface SubagentReportRecord extends SubagentCountsRecord {
-	agent_id?: string;
-	agent_type?: string;
-}
-
-/** `SubagentProgress` on the wire: a `tool_activity`'s `subagent_progress`. */
-export interface SubagentProgressRecord extends SubagentCountsRecord {
-	last_tool_name?: string;
+	tool_progress?: Record<string, Wire.SubagentProgress>;
 }
 
 export interface ChatMessagesHistoryParams {
@@ -1626,298 +1515,10 @@ export interface SessionEffortsResult {
 	efforts: AgentEfforts;
 }
 
-// JSON-RPC 2.0 Notification Params (Server → Client)
-// These match the EventRecord format from the server.
-
-export type ServerMethod =
-	| "text"
-	| "tool_call"
-	| "tool_result"
-	| "tool_activity"
-	| "plan"
-	| "thinking"
-	| "thinking_delta"
-	| "warning"
-	| "error"
-	| "done"
-	| "interrupted"
-	| "process_ended"
-	| "background_wait"
-	| "permission_request"
-	| "ask_user_question"
-	| "question_posted"
-	| "request_cancelled"
-	| "system"
-	| "message"
-	| "message_ingested"
-	| "message_discarded"
-	| "command_output";
-
-export type ServerNotification =
-	| {
-			type: "text";
-			content: string;
-			/**
-			 * The subagent call (Claude's Task / Agent, Codex's spawn) this record
-			 * was produced inside. Absent for the main conversation. May name a
-			 * call that is not loaded or that a fork cut dropped; see
-			 * docs/agent-event.md.
-			 */
-			parent_tool_use_id?: string;
-	  }
-	| {
-			type: "message";
-			content: string;
-			/** See `UserMessage.messageId`. */
-			message_id?: string;
-			origin?: MessageOrigin;
-			subtype?: string;
-			meta?: SystemMessageMeta;
-			/** The posted questions this message answers; see QuestionAnswerRecord. */
-			answering?: QuestionAnswerRecord[];
-			/** What a page sent, when it is a page's send; see `HtmlAction`. */
-			html_action?: HtmlAction;
-			/**
-			 * When the message reached the server (RFC 3339, its clock) — the
-			 * instant a turn it opened began. Absent on a record written before it
-			 * was stamped.
-			 */
-			observed_at?: string;
-	  }
-	| {
-			type: "tool_call";
-			tool_name: string;
-			tool_input: unknown;
-			tool_use_id: string;
-			/**
-			 * The earlier call this one is about, when the input can only name it
-			 * by something else: Claude's `TaskOutput` fetches a task's output by
-			 * `task_id`, and only the adapter can turn that into a `tool_use_id`.
-			 * Absent whenever it could not be resolved, which is ordinary — such a
-			 * call simply stands alone. See docs/tool-call-model.md.
-			 */
-			origin_tool_use_id?: string;
-			/**
-			 * See the `text` record.
-			 */
-			parent_tool_use_id?: string;
-			/**
-			 * When the server saw this record come off the CLI (RFC 3339, the
-			 * server's clock). Absent on a record written before it was stamped.
-			 */
-			observed_at?: string;
-	  }
-	| {
-			type: "tool_result";
-			tool_use_id: string;
-			tool_result: string;
-			/** Absent when the result was prose alone; see `ToolRun.contents`. */
-			contents?: ContentBlock[];
-			/** Absent unless the agent CLI reported the tool call as failed. */
-			is_error?: boolean;
-			/**
-			 * What kind of result this is, for the results that are not simply
-			 * "what the call produced": `background_started` marks the placeholder
-			 * a backgrounded call handed back, `background_result` the real
-			 * outcome that arrived after the turn, and `background_lost` the one
-			 * Pockode wrote itself after the CLI process died with the work still
-			 * running. Absent on every ordinary one.
-			 */
-			subtype?: string;
-			/** Absent, or 0, from an engine that reports no duration (Claude). */
-			duration_ms?: number;
-			/** On a subagent's call alone; see `SubagentReport`. */
-			subagent?: SubagentReportRecord;
-			/** Absent for every tool that is not a command that ran. */
-			exit_code?: number;
-			/**
-			 * The id of the page a successful page tool (`html_render`,
-			 * `html_edit`) stored; absent on every other result.
-			 */
-			html_page?: string;
-			/**
-			 * The work a successful Pockode work tool acted on, as of the call;
-			 * absent on every other result.
-			 */
-			work_ref?: { id?: unknown; type?: unknown; title?: unknown };
-			/** See the `text` record. */
-			parent_tool_use_id?: string;
-			/**
-			 * See `tool_call`. Also absent on `background_lost`, which Pockode
-			 * writes when the next process starts, not when the work died.
-			 */
-			observed_at?: string;
-	  }
-	| {
-			/**
-			 * What a call that has not returned is doing. Never persisted, so it
-			 * carries no seq and never appears in a history page: `activity` is a
-			 * latest value and `output_delta` accumulates.
-			 */
-			type: "tool_activity";
-			tool_use_id: string;
-			activity?: string;
-			output_delta?: string;
-			/** A latest value too; see `SubagentProgress`. */
-			subagent_progress?: SubagentProgressRecord;
-	  }
-	| {
-			/**
-			 * The agent's plan as it stood at one moment
-			 * (docs/turn-progress-ui.md#46-the-plan-record). Exactly one of
-			 * `tool_use_id` (Claude: the call that produced it) and `plan_id`
-			 * (Codex: the record's own id) is set. A plan with no steps carries
-			 * no `steps` field at all.
-			 */
-			type: "plan";
-			steps?: Array<{
-				id?: string;
-				text: string;
-				active_text?: string;
-				status: PlanStepStatus;
-			}>;
-			explanation?: string;
-			tool_use_id?: string;
-			plan_id?: string;
-			/** A Codex child thread's plan; see the `text` record. */
-			parent_tool_use_id?: string;
-	  }
-	| {
-			/**
-			 * A finished stretch of the agent's thinking (docs/turn-progress-ui.md).
-			 * Every field may be absent: an engine that shared no text leaves
-			 * `content` out, and a thinking nothing measured leaves out
-			 * `duration_ms`.
-			 */
-			type: "thinking";
-			/** Claude's thinking, or Codex's reasoning summary; Markdown. */
-			content?: string;
-			/** Codex's raw reasoning, shown under its own label when present. */
-			full_reasoning?: string;
-			/** The model provider withheld the text; `content` is then absent. */
-			redacted?: boolean;
-			/** Measured by the server while it happened. */
-			duration_ms?: number;
-			/** See the `text` record. */
-			parent_tool_use_id?: string;
-	  }
-	| {
-			/**
-			 * The main agent is thinking now. Never persisted, like
-			 * `tool_activity`, and never a subagent's. Ends with the next
-			 * `thinking` record or with the turn. Both deltas absent is the signal
-			 * alone (Claude); otherwise they accumulate into the coming record's
-			 * `content` and `full_reasoning`, separators included.
-			 */
-			type: "thinking_delta";
-			content_delta?: string;
-			full_reasoning_delta?: string;
-	  }
-	| {
-			type: "warning";
-			message: string;
-			code: string;
-			auth_failure?: AuthFailureRecord;
-			usage_limit?: UsageLimitRecord;
-	  }
-	| {
-			type: "error";
-			error: string;
-			auth_failure?: AuthFailureRecord;
-			usage_limit?: UsageLimitRecord;
-			/** When the turn failed; see `tool_call`. */
-			observed_at?: string;
-	  }
-	/**
-	 * `observed_at` on the three endings is when the turn ended (see
-	 * `tool_call`); also absent on the `process_ended` a restarted server
-	 * writes for a run nobody saw end.
-	 */
-	| { type: "done"; observed_at?: string }
-	| { type: "interrupted"; observed_at?: string }
-	| { type: "process_ended"; observed_at?: string }
-	| {
-			/**
-			 * The turn parked on work that outlives the tool call that started it.
-			 * Neither an ending nor output: the CLI resumes by itself when the work
-			 * finishes (agent-integration.md#background-waits).
-			 */
-			type: "background_wait";
-	  }
-	| {
-			type: "permission_request";
-			request_id: string;
-			tool_name: string;
-			tool_input: unknown;
-			tool_use_id: string;
-			permission_suggestions?: PermissionUpdate[];
-	  }
-	| {
-			type: "ask_user_question";
-			request_id: string;
-			tool_use_id: string;
-			questions: AskUserQuestion[];
-	  }
-	| {
-			/**
-			 * A question the agent posted through `question_post`. One question per
-			 * record; `questions` is a one-element list so a client draws it with
-			 * the same renderer the CLI's own prompt uses.
-			 */
-			type: "question_posted";
-			request_id: string;
-			questions: AskUserQuestion[];
-			/** Absent on a record written without one. */
-			asked_at?: string;
-	  }
-	| {
-			type: "request_cancelled";
-			request_id: string;
-			/**
-			 * Absent when the agent withdrew the request itself: the CLI said it no
-			 * longer needs an answer and did not say why.
-			 */
-			reason?: ExpiryReason;
-			/**
-			 * When the withdrawal happened. Absent on a cancellation forwarded from
-			 * a CLI, which does not timestamp them.
-			 */
-			resolved_at?: string;
-	  }
-	| { type: "system"; content: string }
-	| {
-			/**
-			 * The agent has read a message that was sent into a turn already
-			 * running — the read point (agent-integration.md#the-read-point). It
-			 * says nothing itself; it is a boundary, and everything the agent
-			 * writes after it answers the message rather than the one before it.
-			 *
-			 * Written only for a message that arrived mid-turn: the one that opens
-			 * a turn has nothing above it to cut away.
-			 *
-			 * `message_id` names the message that was read. The transcript
-			 * deliberately does not place the new bubble by it and cuts by the
-			 * record's position instead, which is the same answer without the id
-			 * (docs/code/frontend-state.md); it is declared here because a reader
-			 * of this record will ask what became of it.
-			 */
-			type: "message_ingested";
-			message_id?: string;
-			/**
-			 * When the server wrote the read point: where the reply above it ended
-			 * and the one below began. See `tool_call`.
-			 */
-			observed_at?: string;
-	  }
-	| {
-			/**
-			 * A Stop threw away a message the agent had not read: it will never be
-			 * answered (Claude only). Lands inside the turn the Stop ended, ahead
-			 * of its `interrupted`; a read point for the same message may stand
-			 * above it, and this one wins. Unlike the read point it is joined by
-			 * `message_id` — its position says which turn, not which message.
-			 */
-			type: "message_discarded";
-			message_id: string;
-	  }
-	| { type: "command_output"; content: string };
+/**
+ * The params of a `chat.<type>` notification once the subscription id is taken
+ * off: the event as the server wrote it, and the seq of its record when it has
+ * one (`readHistorySeq`). The shapes are generated from the server's Go types
+ * (`wire.generated.ts`); a history page's entries are the same records.
+ */
+export type ServerNotification = Wire.WireEvent & { seq?: HistorySeq };

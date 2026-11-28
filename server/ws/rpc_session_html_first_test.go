@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
@@ -121,8 +122,8 @@ func TestHandler_SessionFork_CopiesHTMLFirst(t *testing.T) {
 	if resp := setHTMLFirst(env, "source", true); resp.Error != nil {
 		t.Fatalf("set_html_first: %s", resp.Error.Message)
 	}
-	store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "hello"})
-	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "a page"})
+	store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "hello"})
+	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.TextRecord{Content: "a page"})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
 	if resp.Error != nil {

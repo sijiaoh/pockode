@@ -8,6 +8,7 @@ import type {
 	HtmlAction,
 	Message,
 	MessageOrigin,
+	MessageSubtype,
 	PermissionAnswerer,
 	PermissionReview,
 	PermissionUpdate,
@@ -16,7 +17,6 @@ import type {
 	QuestionAnswerRecord,
 	QuestionRecordStatus,
 	RecordedAccount,
-	ServerNotification,
 	SessionTurn,
 	SubagentCounts,
 	SubagentProgress,
@@ -30,6 +30,7 @@ import type {
 	UserMessage,
 	WorkRef,
 } from "../types/message";
+import type * as Wire from "../types/wire.generated";
 import { lookupAnswer, parseAnswer } from "../utils/questionAnswer";
 import { generateUUID } from "../utils/uuid";
 import { AGENT_TYPES } from "./agentType";
@@ -148,6 +149,31 @@ function parseSubagentProgress(raw: unknown): SubagentProgress | undefined {
 
 const PLAN_STEP_STATUSES = new Set(["pending", "in_progress", "completed"]);
 
+// A record rather than a list, so a subtype the server adds fails to compile
+// until it is named here.
+const TOOL_RESULT_SUBTYPES: ReadonlySet<string> = new Set(
+	Object.keys({
+		background_started: true,
+		background_result: true,
+		background_lost: true,
+	} satisfies Record<Wire.ToolResultSubtype, true>),
+);
+
+/**
+ * A `tool_result`'s subtype when it is one this client knows. One a newer
+ * server added reads as an ordinary result, which is what it would have been
+ * read as anyway; dropping it at the boundary keeps the event's type honest.
+ */
+function toolResultSubtype(
+	raw: string | undefined,
+): Wire.ToolResultSubtype | undefined {
+	return raw !== undefined && isToolResultSubtype(raw) ? raw : undefined;
+}
+
+function isToolResultSubtype(raw: string): raw is Wire.ToolResultSubtype {
+	return TOOL_RESULT_SUBTYPES.has(raw);
+}
+
 /**
  * A `plan` record's steps. Absent is an empty plan — the server leaves the
  * field out rather than send an empty list — and a step it cannot read is
@@ -174,13 +200,13 @@ function parsePlanSteps(raw: unknown): PlanStep[] {
 // Who answered a permission request and why, when it was not a person
 // (docs/agent-event.md#permission-requests-and-their-answers). A record with
 // no `by` is a person's and carries nothing more.
-function normalizePermissionAnswer(record: Record<string, unknown>): {
+function normalizePermissionAnswer(record: Wire.PermissionResponseRecord): {
 	by?: PermissionAnswerer;
 	review?: PermissionReview;
 } {
 	const by = optionalString(record.by);
 	if (!by) return {};
-	const raw = record.review as Record<string, unknown> | null | undefined;
+	const raw = record.review;
 	if (!raw || typeof raw !== "object") return { by };
 	return {
 		by,
@@ -207,9 +233,11 @@ function normalizeRecordedAccount(raw: unknown): RecordedAccount | undefined {
 		: { agent };
 }
 
-// Boundary defense for one question's shape: the Go encoder emits `null` for a
-// nil `options` slice, and a record may carry none at all.
-function normalizeQuestion(raw: AskUserQuestion | undefined): AskUserQuestion {
+// One question's shape made whole: the Go encoder emits `null` for a nil
+// `options` slice, and a record may carry no question at all.
+function normalizeQuestion(
+	raw: Wire.AskUserQuestion | undefined,
+): AskUserQuestion {
 	return {
 		question: raw?.question ?? "",
 		header: raw?.header ?? "",
@@ -255,9 +283,20 @@ export function normalizeHtmlAction(raw: unknown): HtmlAction | undefined {
 // A cancelled question is stored with a nil answers map, and `omitempty` on the
 // Go side then drops the key from the record entirely — so cancellation reaches
 // the client as an absent field, not as null. Both mean cancelled.
-function normalizeAnswers(raw: unknown): Record<string, string> | null {
+function normalizeAnswers(
+	raw: Record<string, string> | undefined,
+): Record<string, string> | null {
 	if (raw === null || typeof raw !== "object") return null;
-	return raw as Record<string, string>;
+	return raw;
+}
+
+// Only an allow lets a call run, and the server reads every other value as a
+// deny (agent.ParsePermissionChoice); a card drawn from the record says the
+// same.
+function normalizeChoice(
+	raw: Wire.PermissionChoiceName | undefined,
+): Wire.PermissionChoiceName {
+	return raw === "allow" || raw === "always_allow" ? raw : "deny";
 }
 
 // Normalized event with camelCase (internal representation)
@@ -328,7 +367,7 @@ export type NormalizedEvent =
 			 * process died with the work still running. Empty for every ordinary
 			 * result.
 			 */
-			subtype?: string;
+			subtype?: Wire.ToolResultSubtype;
 			durationMs?: number;
 			subagent?: SubagentReport;
 			exitCode?: number;
@@ -395,7 +434,7 @@ export type NormalizedEvent =
 			/** See `UserMessage.messageId`. */
 			messageId?: string;
 			origin?: MessageOrigin;
-			subtype?: string;
+			subtype?: MessageSubtype;
 			meta?: SystemMessageMeta;
 			/** The posted questions this message answers; see QuestionAnswerRecord. */
 			answering?: QuestionAnswerRecord[];
@@ -418,7 +457,7 @@ export type NormalizedEvent =
 	| {
 			type: "permission_response";
 			requestId: string;
-			choice: "deny" | "allow" | "always_allow";
+			choice: Wire.PermissionChoiceName;
 			by?: PermissionAnswerer;
 			review?: PermissionReview;
 			/** See `tool_call`. */
@@ -495,39 +534,42 @@ export function readHistorySeq(e: unknown): HistorySeq | undefined {
 	return typeof seq === "number" && seq > 0 ? seq : undefined;
 }
 
-// Convert snake_case server event to camelCase
-export function normalizeEvent(
-	e: ServerNotification | Record<string, unknown>,
-): NormalizedEvent {
-	const record = e as Record<string, unknown>;
-	const type = record.type as string;
+/**
+ * A server event in the client's own shape (camelCase, absent fields filled in
+ * or validated). `e` is a notification or a history record: the server's,
+ * typed by `wire.generated.ts`, though one written by an older or newer server
+ * may not match this build's types — which is why closed sets and nested
+ * objects are still checked here rather than trusted.
+ */
+export function normalizeEvent(e: unknown): NormalizedEvent {
+	const record = e as Wire.WireEvent;
 
-	switch (type) {
+	switch (record.type) {
 		case "text":
 			return {
 				type: "text",
-				content: (record.content as string) ?? "",
-				parentToolUseId: record.parent_tool_use_id as string | undefined,
+				content: record.content ?? "",
+				parentToolUseId: record.parent_tool_use_id,
 			};
 		case "tool_call":
 			return {
 				type: "tool_call",
-				toolUseId: record.tool_use_id as string,
-				toolName: record.tool_name as string,
+				toolUseId: record.tool_use_id ?? "",
+				toolName: record.tool_name ?? "",
 				toolInput: record.tool_input,
-				originToolUseId: record.origin_tool_use_id as string | undefined,
-				parentToolUseId: record.parent_tool_use_id as string | undefined,
+				originToolUseId: record.origin_tool_use_id,
+				parentToolUseId: record.parent_tool_use_id,
 				...(record.subtype === "resumed" ? { resumed: true } : {}),
 				observedAt: serverTime(record.observed_at),
 			};
 		case "tool_result":
 			return {
 				type: "tool_result",
-				toolUseId: record.tool_use_id as string,
-				toolResult: (record.tool_result as string) ?? "",
+				toolUseId: record.tool_use_id ?? "",
+				toolResult: record.tool_result ?? "",
 				contents: parseContentBlocks(record.contents),
 				isError: record.is_error === true,
-				subtype: record.subtype as string | undefined,
+				subtype: toolResultSubtype(record.subtype),
 				// Zero is what an engine that reports no duration sends, and it
 				// means the same as absent: nobody measured this call.
 				durationMs:
@@ -537,10 +579,7 @@ export function normalizeEvent(
 				subagent: parseSubagentReport(record.subagent),
 				exitCode:
 					typeof record.exit_code === "number" ? record.exit_code : undefined,
-				htmlPage:
-					typeof record.html_page === "string" && record.html_page !== ""
-						? record.html_page
-						: undefined,
+				htmlPage: optionalString(record.html_page),
 				workRef: parseWorkRef(record.work_ref),
 				observedAt: serverTime(record.observed_at),
 				// No `parent_tool_use_id`: a result joins its call by id at any
@@ -565,9 +604,9 @@ export function normalizeEvent(
 		case "tool_activity":
 			return {
 				type: "tool_activity",
-				toolUseId: record.tool_use_id as string,
-				activity: record.activity as string | undefined,
-				outputDelta: record.output_delta as string | undefined,
+				toolUseId: record.tool_use_id ?? "",
+				activity: record.activity,
+				outputDelta: record.output_delta,
 				subagentProgress: parseSubagentProgress(record.subagent_progress),
 			};
 		case "thinking":
@@ -575,33 +614,33 @@ export function normalizeEvent(
 				type: "thinking",
 				thought: {
 					id: newPartId(),
-					content: (record.content as string) ?? "",
-					fullReasoning: (record.full_reasoning as string) ?? "",
+					content: record.content ?? "",
+					fullReasoning: record.full_reasoning ?? "",
 					redacted: record.redacted === true,
 					...(typeof record.duration_ms === "number" && record.duration_ms > 0
 						? { durationMs: record.duration_ms }
 						: {}),
 				},
-				parentToolUseId: record.parent_tool_use_id as string | undefined,
+				parentToolUseId: record.parent_tool_use_id,
 			};
 		case "thinking_delta":
 			return {
 				type: "thinking_delta",
-				contentDelta: (record.content_delta as string) ?? "",
-				fullReasoningDelta: (record.full_reasoning_delta as string) ?? "",
+				contentDelta: record.content_delta ?? "",
+				fullReasoningDelta: record.full_reasoning_delta ?? "",
 			};
 		case "warning":
 			return {
 				type: "warning",
-				message: (record.message as string) ?? "",
-				code: (record.code as string) ?? "",
+				message: record.message ?? "",
+				code: record.code ?? "",
 				authFailure: normalizeRecordedAccount(record.auth_failure),
 				usageLimit: normalizeRecordedAccount(record.usage_limit),
 			};
 		case "error":
 			return {
 				type: "error",
-				error: (record.error as string) ?? "",
+				error: record.error ?? "",
 				authFailure: normalizeRecordedAccount(record.auth_failure),
 				usageLimit: normalizeRecordedAccount(record.usage_limit),
 				observedAt: serverTime(record.observed_at),
@@ -621,17 +660,15 @@ export function normalizeEvent(
 		case "background_wait":
 			return { type: "background_wait" };
 		case "system":
-			return { type: "system", content: (record.content as string) ?? "" };
+			return { type: "system", content: record.content ?? "" };
 		case "message":
 			return {
 				type: "message",
-				content: (record.content as string) ?? "",
-				...(typeof record.message_id === "string" && record.message_id
-					? { messageId: record.message_id }
-					: {}),
+				content: record.content ?? "",
+				...(record.message_id ? { messageId: record.message_id } : {}),
 				origin: normalizeOrigin(record.origin),
-				subtype: record.subtype as string | undefined,
-				meta: record.meta as SystemMessageMeta | undefined,
+				subtype: record.subtype,
+				meta: record.meta,
 				answering: normalizeAnswering(record.answering),
 				command: normalizeCommand(record.command),
 				attachments: parseFileBlocks(record.attachments),
@@ -641,10 +678,13 @@ export function normalizeEvent(
 		case "permission_request":
 			return {
 				type: "permission_request",
-				requestId: record.request_id as string,
-				toolName: record.tool_name as string,
+				requestId: record.request_id ?? "",
+				toolName: record.tool_name ?? "",
 				toolInput: record.tool_input,
-				toolUseId: record.tool_use_id as string,
+				toolUseId: record.tool_use_id ?? "",
+				// The CLI's own suggestions, passed through and handed back to it
+				// with an Always Allow: the narrower client union is the CLI's
+				// contract, which the server does not check either.
 				permissionSuggestions: record.permission_suggestions as
 					| PermissionUpdate[]
 					| undefined,
@@ -652,48 +692,40 @@ export function normalizeEvent(
 		case "permission_response":
 			return {
 				type: "permission_response",
-				requestId: record.request_id as string,
-				choice: record.choice as "deny" | "allow" | "always_allow",
+				requestId: record.request_id ?? "",
+				choice: normalizeChoice(record.choice),
 				...normalizePermissionAnswer(record),
 				observedAt: serverTime(record.observed_at),
 			};
 		case "request_cancelled":
 			return {
 				type: "request_cancelled",
-				requestId: record.request_id as string,
+				requestId: record.request_id ?? "",
 				reason: normalizeExpiryReason(record.reason),
-				resolvedAt: record.resolved_at as string | undefined,
+				resolvedAt: record.resolved_at,
 			};
 		case "question_posted":
 			return {
 				type: "question_posted",
-				requestId: record.request_id as string,
+				requestId: record.request_id ?? "",
 				// The server writes exactly one, in a one-element list so that this
 				// and the CLI's own prompt share a renderer. A record with none
 				// names nothing answerable; the empty question keeps the card
 				// drawable rather than crashing the transcript over it.
-				question: normalizeQuestion(
-					(record.questions as AskUserQuestion[] | undefined)?.[0],
-				),
-				askedAt: record.asked_at as string | undefined,
+				question: normalizeQuestion(record.questions?.[0]),
+				askedAt: record.asked_at,
 			};
 		case "ask_user_question":
 			return {
 				type: "legacy_question",
-				requestId: record.request_id as string,
-				toolUseId: record.tool_use_id as string,
-				// Boundary defense for shape drift across the WS contract: the
-				// Go encoder omits empty `questions` and emits `null` for a nil
-				// `options` slice. Coerce to the non-nullable TS shape here so
-				// downstream code can trust the types.
-				questions: (
-					(record.questions as AskUserQuestion[] | undefined) ?? []
-				).map((q) => ({ ...q, options: q.options ?? [] })),
+				requestId: record.request_id ?? "",
+				toolUseId: record.tool_use_id ?? "",
+				questions: (record.questions ?? []).map(normalizeQuestion),
 			};
 		case "question_response":
 			return {
 				type: "question_response",
-				requestId: record.request_id as string,
+				requestId: record.request_id ?? "",
 				answers: normalizeAnswers(record.answers),
 			};
 		case "message_ingested":
@@ -708,19 +740,28 @@ export function normalizeEvent(
 		case "message_discarded":
 			return {
 				type: "message_discarded",
-				messageId: (record.message_id as string) ?? "",
+				messageId: record.message_id ?? "",
 			};
 		case "raw":
-			return { type: "raw", content: (record.content as string) ?? "" };
+			return { type: "raw", content: record.content ?? "" };
 		case "command_output":
 			return {
 				type: "command_output",
-				content: (record.content as string) ?? "",
+				content: record.content ?? "",
 			};
 		default:
-			// Fallback for unknown types - treat as raw
-			return { type: "raw", content: JSON.stringify(record) };
+			return unknownEvent(record, e);
 	}
+}
+
+/**
+ * What a record of a type this build does not know becomes: its JSON, drawn
+ * as raw output. `handled` is the record narrowed past every case above, which
+ * is `never` while each generated type has one — so a type the server adds
+ * fails to compile here until it is handled.
+ */
+function unknownEvent(_handled: never, e: unknown): NormalizedEvent {
+	return { type: "raw", content: JSON.stringify(e) };
 }
 
 /**
@@ -2404,7 +2445,7 @@ export function applyBackReference(
 	record: unknown,
 	options: ApplyOptions = {},
 ): Message[] {
-	const event = normalizeEvent(record as Record<string, unknown>);
+	const event = normalizeEvent(record);
 	if (event.type === "message") {
 		return event.answering
 			? applyAnswering(messages, event.answering, event.messageId)
@@ -3118,7 +3159,7 @@ export function settleRunningToolRuns(
 interface UserMessageOptions {
 	messageId?: string;
 	source?: MessageOrigin;
-	subtype?: string;
+	subtype?: MessageSubtype;
 	meta?: SystemMessageMeta;
 	anchorSeq?: HistorySeq;
 	/** The posted questions this message answers; see QuestionAnswerRecord. */
@@ -3260,7 +3301,9 @@ export function applyUserMessage(
  * "update wherever it is" operations, so replaying them costs nothing when the
  * target is not there.
  */
-const BACK_REFERENCE_TYPES = new Set([
+const BACK_REFERENCE_TYPES: ReadonlySet<string> = new Set<
+	Wire.HistoryRecord["type"]
+>([
 	"tool_result",
 	"permission_response",
 	"question_response",
@@ -3365,22 +3408,22 @@ function finalizeStreamingMessages(
 }
 
 export function isBackReference(record: unknown): boolean {
-	const fields = record as Record<string, unknown> | null;
+	const fields = record as Wire.HistoryRecord | null;
 	const type = fields?.type;
 	// A message is kept for one half of itself only: the questions it answers
 	// may have been asked pages below. An ordinary message settles nothing and
 	// must never be replayed, which would put a second copy of it on screen —
 	// see applyBackReference for how the two halves are told apart.
-	if (type === "message") {
-		return Array.isArray(fields?.answering) && fields.answering.length > 0;
+	if (fields?.type === "message") {
+		return Array.isArray(fields.answering) && fields.answering.length > 0;
 	}
 	// A Claude plan is filed on its call, which may be pages above. A Codex one
 	// is a row of its own, and replaying it would draw it a second time.
 	// One with no seq arrived live, and replayed over an older page alone it
 	// could not be placed in record order; its call not loaded, it is dropped.
-	if (type === "plan") {
+	if (fields?.type === "plan") {
 		return (
-			typeof fields?.tool_use_id === "string" &&
+			typeof fields.tool_use_id === "string" &&
 			readHistorySeq(record) !== undefined
 		);
 	}
@@ -3395,12 +3438,9 @@ export function isBackReference(record: unknown): boolean {
  * alone learns nothing from it. It is the boundary terminal of the page below
  * and is handed to {@link prependHistoryPage} when that page arrives.
  */
-const TURN_TERMINAL_TYPES = new Set([
-	"interrupted",
-	"process_ended",
-	"done",
-	"error",
-]);
+const TURN_TERMINAL_TYPES: ReadonlySet<string> = new Set<
+	Wire.HistoryRecord["type"]
+>(["interrupted", "process_ended", "done", "error"]);
 
 export function isTurnTerminal(record: unknown): boolean {
 	const type = (record as Record<string, unknown> | null)?.type;
@@ -3499,7 +3539,7 @@ export function prependHistoryPage(
 	// ended, and applying it after the turn has been closed would be a no-op.
 	let closed = older;
 	if (catchUp.boundaryTerminal) {
-		const record = catchUp.boundaryTerminal as Record<string, unknown>;
+		const record = catchUp.boundaryTerminal;
 		// With its seq, unlike the back-references: this record is the last of the
 		// turn it ends, so it is the point a fork of that turn has to cut at — the
 		// address replaying the whole history unbroken would have left there.
@@ -3610,11 +3650,10 @@ export function replayHistory(
 	let messages: Message[] = [];
 
 	for (const record of records) {
-		const raw = record as Record<string, unknown>;
 		messages = applyServerEvent(
 			messages,
-			normalizeEvent(raw),
-			readHistorySeq(raw),
+			normalizeEvent(record),
+			readHistorySeq(record),
 			{ clock },
 		);
 	}

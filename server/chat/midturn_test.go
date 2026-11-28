@@ -18,7 +18,7 @@ type midTurnFixture struct {
 	client     *Client
 	agent      *mockAgent
 	pm         *process.Manager
-	broadcasts []agent.EventRecord
+	broadcasts []agent.Record
 }
 
 func newMidTurnFixture(t *testing.T) *midTurnFixture {
@@ -37,7 +37,7 @@ func newMidTurnFixture(t *testing.T) *midTurnFixture {
 	}
 
 	f := &midTurnFixture{store: store, client: NewClient(store, pm), agent: ag, pm: pm}
-	f.client.SetBroadcaster(func(_ string, record agent.EventRecord, _ session.HistorySeq, _ any) {
+	f.client.SetBroadcaster(func(_ string, record agent.Record, _ session.HistorySeq, _ any) {
 		f.broadcasts = append(f.broadcasts, record)
 	})
 	return f

@@ -172,7 +172,7 @@ func TestReadStderrSurvivesAnOverLongLine(t *testing.T) {
 }
 
 // recordEnvelope is how much larger a history line may be than the CLI event it
-// carries: the event's payload sits inside EventRecord's own JSON, which adds a
+// carries: the event's payload sits inside its record's own JSON, which adds a
 // type, ids and meta around it. A few hundred bytes in reality — the margin
 // asserted below is far past that on purpose, because it costs nothing:
 // filestore's ceiling is a limit and not an allocation (see jsonlReadBuffer).

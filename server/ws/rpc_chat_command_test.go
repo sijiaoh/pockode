@@ -2,7 +2,6 @@ package ws
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -18,20 +17,20 @@ func newBranchTestEnv(t *testing.T, mock *mockAgent, branch string) *testEnv {
 	return newTestEnvWithWorkDir(t, mock, dir)
 }
 
-func messageRecords(t *testing.T, env *testEnv, sessionID string) []agent.EventRecord {
+func messageRecords(t *testing.T, env *testEnv, sessionID string) []agent.MessageRecord {
 	t.Helper()
 	raws, err := env.getMainWorktree().SessionStore.GetHistory(context.Background(), sessionID)
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
-	var out []agent.EventRecord
+	var out []agent.MessageRecord
 	for _, raw := range raws {
-		var rec agent.EventRecord
-		if err := json.Unmarshal(raw, &rec); err != nil {
-			t.Fatalf("unmarshal record: %v", err)
+		rec, err := agent.DecodeRecord(raw)
+		if err != nil {
+			t.Fatalf("decode record: %v", err)
 		}
-		if rec.Type == agent.EventTypeMessage {
-			out = append(out, rec)
+		if message, ok := rec.(agent.MessageRecord); ok {
+			out = append(out, message)
 		}
 	}
 	return out

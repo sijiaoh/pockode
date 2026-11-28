@@ -575,7 +575,7 @@ the working half for the broken one.
 ### Data Flow
 
 ```
-ServerNotification (snake_case)
+ServerNotification (snake_case, generated from Go: types/wire.generated.ts)
   → normalizeEvent() → NormalizedEvent (camelCase)
     → applyServerEvent() → Message[]
       → Component state (via useSubscription hook)
@@ -939,7 +939,7 @@ honest:
 
 - **Status is derived, never sent.** A call with no result is `running`;
   `success` / `error` come from the `is_error` already on the wire. No status
-  field was added to `EventRecord`, because every input to the derivation is a
+  field was added to any record, because every input to the derivation is a
   record the client already has.
 - **A backgrounded call is not a finished one.** Its first result is the
   placeholder the agent read, recorded with `subtype: "background_started"`, and
@@ -1043,7 +1043,7 @@ honest:
   state is state" rule applied to a single part.
 
 Failure comes from the CLI's `is_error` flag
-([agent-integration.md](agent-integration.md#eventrecord-unified-event-format)),
+([agent-integration.md](agent-integration.md#history-records-and-live-events)),
 never from the result text. So `error` means the *call* failed — an unknown
 `subagent_type`, a command that exited non-zero. A subagent that ran fine and
 reported that it could not do the job is `success`, and the report says the

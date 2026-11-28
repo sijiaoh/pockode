@@ -129,7 +129,7 @@ func TestExpiry_SaysNothingAboutABackgroundWait(t *testing.T) {
 	waitUntil(t, "the process to end", func() bool { return m.GetProcess("sess-1") == nil })
 
 	for _, record := range historyRecords(t, store, "sess-1") {
-		if record.Type == agent.EventTypeRequestCancelled {
+		if record.Type() == agent.EventTypeRequestCancelled {
 			t.Errorf("wrote a cancellation for a background wait: %+v", record)
 		}
 	}

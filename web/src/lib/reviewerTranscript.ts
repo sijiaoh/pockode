@@ -1,3 +1,6 @@
+import type { MessageSubtype } from "../types/message";
+import type * as Wire from "../types/wire.generated";
+
 /**
  * How a permission reviewer's transcript reads: the two system messages
  * Pockode sends it (docs/unattended-mode-ui.md §5.1). The subtypes and the
@@ -5,10 +8,18 @@
  * `permreview.NudgeSubtype`, `reviewMessage`, `nudgeMessage`).
  */
 
-export const PERMISSION_REVIEW_SUBTYPE = "permission_review";
-export const PERMISSION_REVIEW_NUDGE_SUBTYPE = "permission_review_nudge";
+export const PERMISSION_REVIEW_SUBTYPE =
+	"permission_review" satisfies Wire.MessageSubtype;
+export const PERMISSION_REVIEW_NUDGE_SUBTYPE =
+	"permission_review_nudge" satisfies Wire.MessageSubtype;
 
-export function isReviewerEventSubtype(subtype: string | undefined): boolean {
+export type ReviewerEventSubtype =
+	| typeof PERMISSION_REVIEW_SUBTYPE
+	| typeof PERMISSION_REVIEW_NUDGE_SUBTYPE;
+
+export function isReviewerEventSubtype(
+	subtype: MessageSubtype | undefined,
+): subtype is ReviewerEventSubtype {
 	return (
 		subtype === PERMISSION_REVIEW_SUBTYPE ||
 		subtype === PERMISSION_REVIEW_NUDGE_SUBTYPE

@@ -68,7 +68,7 @@ func TestFileStore_GetHistory_PartialLine(t *testing.T) {
 	if _, err := store.Create(ctx, sessionID, CreateSpec{}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
-	if _, err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "hello"}); err != nil {
+	if _, err := store.AppendToHistory(ctx, sessionID, testRecord{"type": "text", "content": "hello"}); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
 
@@ -76,7 +76,7 @@ func TestFileStore_GetHistory_PartialLine(t *testing.T) {
 	appendRaw(t, historyPath, `{"type":"text","con`)
 
 	// Appending after the crash must keep the new record readable.
-	if _, err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "world"}); err != nil {
+	if _, err := store.AppendToHistory(ctx, sessionID, testRecord{"type": "text", "content": "world"}); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
 
@@ -130,12 +130,12 @@ func TestFileStore_DamagedHistory_KeepsSeqsUnique(t *testing.T) {
 	if _, err := store.Create(ctx, sessionID, CreateSpec{}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
-	if _, err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "kept"}); err != nil {
+	if _, err := store.AppendToHistory(ctx, sessionID, testRecord{"type": "text", "content": "kept"}); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
 	appendRaw(t, filepath.Join(dir, "sessions", sessionID, "history.jsonl"), `{"type":"text","con`)
 
-	seq, err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "after the damage"})
+	seq, err := store.AppendToHistory(ctx, sessionID, testRecord{"type": "text", "content": "after the damage"})
 	if err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}

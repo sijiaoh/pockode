@@ -1420,7 +1420,7 @@ type cliEvent struct {
 // frame is a subagent's: those uuids are entries of the subagent's sidechain
 // transcript (subagents/agent-<id>.jsonl beside the session's own), so
 // --resume-session-at cannot find them in the main one. See
-// agent.EventRecord.ProviderMessageID.
+// agent.TextRecord.ProviderMessageID.
 func (e cliEvent) anchorID() string {
 	if e.ParentToolUseID != "" {
 		return ""
@@ -1977,7 +1977,7 @@ func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroun
 			// taskOutcome). A backgrounded subagent's placeholder does name the
 			// subagent, which is true from launch on; its figures come with the
 			// outcome too.
-			subtype := ""
+			var subtype agent.ToolResultSubtype
 			var durationMs int64
 			var subagent *agent.SubagentReport
 			if results == 1 {

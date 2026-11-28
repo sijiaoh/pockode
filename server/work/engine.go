@@ -15,7 +15,7 @@ import (
 // Satisfied by *chat.Client. A send to a session that does not exist fails
 // with an error wrapping session.ErrSessionNotFound.
 type MessageSender interface {
-	SendSystemMessage(ctx context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error
+	SendSystemMessage(ctx context.Context, sessionID, content string, subtype agent.MessageSubtype, meta *agent.MessageMeta) error
 }
 
 // SenderResolver resolves the MessageSender for a given worktree so that a
@@ -780,7 +780,7 @@ func (e *Engine) notifyParentOfChildQuestions(child Work, qs []session.PendingQu
 // tellParentAboutQuestions is the one way news about a subtask's questions
 // reaches its story — asked, or settled. what is the log's word for which.
 // build may decline to send, having seen the parent.
-func (e *Engine) tellParentAboutQuestions(child Work, what string, count int, subtype string, build func(parent Work) (string, bool)) {
+func (e *Engine) tellParentAboutQuestions(child Work, what string, count int, subtype agent.MessageSubtype, build func(parent Work) (string, bool)) {
 	parent, found, err := e.store.Get(child.StoryID)
 	if err != nil {
 		slog.Warn("failed to get parent work for a child's question", "parentId", child.StoryID, "error", err)
@@ -1070,13 +1070,13 @@ func (e *Engine) notifyWatcherOfEnd(event ChangeEvent) {
 // Anything else that goes wrong is a fault and is logged as one — including a
 // watcher whose turn is holding a request on screen, which refuses every
 // message: the news is lost there, not queued.
-func (e *Engine) notifyWatcher(watcher Watcher, story Work, msg, subtype string) {
+func (e *Engine) notifyWatcher(watcher Watcher, story Work, msg string, subtype agent.MessageSubtype) {
 	e.tellWatcher(watcher, story, subtype, func() (string, bool) { return msg, true })
 }
 
 // tellWatcher is notifyWatcher for news the watcher may turn out not to need:
 // build runs once the watcher is known to be one news reaches, and may decline.
-func (e *Engine) tellWatcher(watcher Watcher, story Work, subtype string, build func() (string, bool)) {
+func (e *Engine) tellWatcher(watcher Watcher, story Work, subtype agent.MessageSubtype, build func() (string, bool)) {
 	w, found, err := e.store.FindBySessionID(watcher.SessionID)
 	if err != nil {
 		slog.Warn("failed to find the work of a story's watcher",

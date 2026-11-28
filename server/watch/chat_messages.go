@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 
@@ -61,7 +62,7 @@ func (w *ChatMessagesWatcher) OnChatMessage(msg process.ChatMessage) {
 	// summary one per few words — and the only ones whose loss costs nothing
 	// lasting: the whole output arrives again with the result, the whole
 	// thinking with its record, and a client that subscribes is handed the
-	// newest activity line (agent.EventType.Persisted). Everything else in this
+	// newest activity line (agent.LiveEvent). Everything else in this
 	// buffer happens once, and a dropped `done` leaves a finished turn drawn as
 	// running until the client resubscribes. Without a reserve, a burst of
 	// progress could evict one.
@@ -69,7 +70,7 @@ func (w *ChatMessagesWatcher) OnChatMessage(msg process.ChatMessage) {
 	// Half the buffer is a reserve, not a tuned figure: it only engages once the
 	// consumer has fallen far behind, which is exactly when the cheapest thing
 	// to drop should be dropped.
-	if !msg.Event.EventType().Persisted() && len(w.msgCh) > cap(w.msgCh)/2 {
+	if _, live := msg.Event.Encode().(agent.LiveEvent); live && len(w.msgCh) > cap(w.msgCh)/2 {
 		slog.Debug("dropped a live progress update to keep room for events that cannot be lost",
 			"sessionId", msg.SessionID, "queued", len(w.msgCh))
 		return
@@ -96,11 +97,11 @@ func (w *ChatMessagesWatcher) messageLoop() {
 }
 
 func (w *ChatMessagesWatcher) notifyMessage(msg process.ChatMessage) {
-	w.notifyEvent(msg.SessionID, msg.Event.ToRecord(), msg.Seq, nil)
+	w.notifyEvent(msg.SessionID, msg.Event.Encode(), msg.Seq, nil)
 }
 
 // notifyEvent broadcasts an event to session subscribers, optionally excluding one notifier.
-func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRecord, seq session.HistorySeq, exclude Notifier) {
+func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.Wire, seq session.HistorySeq, exclude Notifier) {
 	w.sessionMu.RLock()
 	ids := make([]string, len(w.sessionToIDs[sessionID]))
 	copy(ids, w.sessionToIDs[sessionID])
@@ -110,7 +111,7 @@ func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRe
 		return
 	}
 
-	method := "chat." + string(record.Type)
+	method := "chat." + string(record.Type())
 
 	for _, id := range ids {
 		sub := w.GetSubscription(id)
@@ -119,9 +120,9 @@ func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRe
 		}
 
 		params := notifyParams{
-			ID:          sub.ID,
-			Seq:         seq,
-			EventRecord: record,
+			ID:    sub.ID,
+			Seq:   seq,
+			Event: record,
 		}
 
 		n := Notification{Method: method, Params: params}
@@ -134,15 +135,36 @@ func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRe
 	}
 }
 
-// notifyParams embeds EventRecord with subscription ID for routing.
+// notifyParams is the event's own JSON with the subscription ID for routing,
+// and its seq, in front of it: one flat object, as the frontend reads it.
 type notifyParams struct {
 	ID string `json:"id"`
 	// Seq is the record's address in the session's history, the same number
 	// replayed history is stamped with, so a client cannot tell a live record
 	// from a replayed one when it names it later. Omitted for an event that was
 	// never persisted.
-	Seq session.HistorySeq `json:"seq,omitempty"`
-	agent.EventRecord
+	Seq   session.HistorySeq `json:"seq,omitempty"`
+	Event agent.Wire         `json:"-"`
+}
+
+// MarshalJSON flattens Event into the params, which embedding cannot do for
+// an interface. The event cannot carry an "id" or "seq" of its own: no wire
+// type has either field.
+func (p notifyParams) MarshalJSON() ([]byte, error) {
+	type head notifyParams
+	routing, err := json.Marshal(head(p))
+	if err != nil {
+		return nil, err
+	}
+	event, err := json.Marshal(p.Event)
+	if err != nil {
+		return nil, err
+	}
+	// Both are non-empty objects: routing always has "id", the event "type".
+	out := make([]byte, 0, len(routing)+len(event))
+	out = append(out, routing[:len(routing)-1]...)
+	out = append(out, ',')
+	return append(out, event[1:]...), nil
 }
 
 // Subscribe registers a subscriber for a specific session under the
@@ -233,6 +255,6 @@ func (w *ChatMessagesWatcher) IsViewing(sessionID string) bool {
 // through a process's event stream — a message a client sent, a question
 // Pockode posted on an agent's behalf, its withdrawal — reaches the other
 // clients watching the same session without waiting for a reload.
-func (w *ChatMessagesWatcher) NotifyRecord(sessionID string, record agent.EventRecord, seq session.HistorySeq, exclude Notifier) {
+func (w *ChatMessagesWatcher) NotifyRecord(sessionID string, record agent.Record, seq session.HistorySeq, exclude Notifier) {
 	w.notifyEvent(sessionID, record, seq, exclude)
 }

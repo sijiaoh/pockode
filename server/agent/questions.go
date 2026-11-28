@@ -44,26 +44,26 @@ func UnansweredQuestions(records []json.RawMessage) []session.PendingQuestion {
 	answeredBy := make(map[string][]session.PendingQuestion)
 
 	for _, raw := range records {
-		var rec EventRecord
-		if err := json.Unmarshal(raw, &rec); err != nil {
+		rec, err := DecodeRecord(raw)
+		if err != nil {
 			continue
 		}
-		switch rec.Type {
-		case EventTypeQuestionPosted:
+		switch rec := rec.(type) {
+		case QuestionPostedRecord:
 			if q, ok := pendingFromRecord(rec); ok {
 				open = append(open, q)
 			}
-		case EventTypeMessage:
+		case MessageRecord:
 			// A message is the answer record: see QuestionAnswer.
 			for _, answer := range rec.Answering {
 				if q, ok := drop(answer.RequestID); ok && rec.MessageID != "" {
 					answeredBy[rec.MessageID] = append(answeredBy[rec.MessageID], q)
 				}
 			}
-		case EventTypeMessageDiscarded:
+		case MessageDiscardedRecord:
 			open = append(open, answeredBy[rec.MessageID]...)
 			delete(answeredBy, rec.MessageID)
-		case EventTypeRequestCancelled:
+		case RequestCancelledRecord:
 			drop(rec.RequestID)
 		}
 	}
@@ -73,7 +73,7 @@ func UnansweredQuestions(records []json.RawMessage) []session.PendingQuestion {
 // pendingFromRecord rebuilds the live question a question_posted record was
 // written from. A record with no request id or no question names nothing that
 // could be answered, so it is not inherited.
-func pendingFromRecord(rec EventRecord) (session.PendingQuestion, bool) {
+func pendingFromRecord(rec QuestionPostedRecord) (session.PendingQuestion, bool) {
 	if rec.RequestID == "" || len(rec.Questions) == 0 {
 		return session.PendingQuestion{}, false
 	}

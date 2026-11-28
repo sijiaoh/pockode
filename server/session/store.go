@@ -58,11 +58,11 @@ type Store interface {
 	AddUsage(ctx context.Context, sessionID string, report UsageReport) error
 
 	// History persistence
-	// AppendToHistory appends a JSON-serializable record to history (does not
-	// update timestamp) and returns the record's sequence number: its 1-based
-	// position in the history GetHistory returns. Sending that number to clients
-	// is the only way they can name a record — see HistorySeq.
-	AppendToHistory(ctx context.Context, sessionID string, record any) (HistorySeq, error)
+	// AppendToHistory appends a record to history (does not update timestamp)
+	// and returns the record's sequence number: its 1-based position in the
+	// history GetHistory returns. Sending that number to clients is the only
+	// way they can name a record — see HistorySeq.
+	AppendToHistory(ctx context.Context, sessionID string, record HistoryRecord) (HistorySeq, error)
 	// WriteHistory replaces a session's whole history with records.
 	//
 	// For a session nothing is streaming to yet — a fork's copied history, written
@@ -128,6 +128,29 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 
 	return store, nil
 }
+
+// HistoryRecord is one line of a session's history.jsonl: agent.Record, and
+// the one record this package writes itself (processEndedRecord).
+//
+// The marker method is what it is for. The agent package also serializes
+// events that report a latest value and must never be stored (agent.LiveEvent);
+// those marshal to JSON just as well, so taking any value that does would let
+// one be written by mistake. Declared here rather than taking agent.Record
+// because agent is built on top of this package.
+type HistoryRecord interface {
+	json.Marshaler
+	HistoryRecord()
+}
+
+// processEndedRecord is agent.ProcessEndedRecord with no moment, written by a
+// restarted server for a run nobody saw end.
+type processEndedRecord struct{}
+
+func (processEndedRecord) MarshalJSON() ([]byte, error) {
+	return []byte(`{"type":"` + HistoryTypeProcessEnded + `"}`), nil
+}
+
+func (processEndedRecord) HistoryRecord() {}
 
 // HistoryTypeProcessEnded is the record that says a session's agent process is
 // gone. Spelled out here rather than imported: the agent package owns the event
@@ -204,8 +227,7 @@ func (s *FileStore) abortTurnsTheLastRunLeftOpen() {
 		if !aborted && !s.historyLeftRunOpen(s.sessions[i].ID) {
 			continue
 		}
-		if _, err := s.AppendToHistory(context.Background(), s.sessions[i].ID,
-			map[string]any{"type": HistoryTypeProcessEnded}); err != nil {
+		if _, err := s.AppendToHistory(context.Background(), s.sessions[i].ID, processEndedRecord{}); err != nil {
 			slog.Warn("failed to record the end of a session interrupted by a restart",
 				"sessionId", s.sessions[i].ID, "error", err)
 			continue
@@ -866,7 +888,7 @@ func countEntries(n int) string {
 	return fmt.Sprintf("%d history entries", n)
 }
 
-func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, record any) (HistorySeq, error) {
+func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, record HistoryRecord) (HistorySeq, error) {
 	if err := ctx.Err(); err != nil {
 		return NoHistorySeq, err
 	}
