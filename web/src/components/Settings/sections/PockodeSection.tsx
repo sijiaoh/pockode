@@ -182,7 +182,10 @@ export default function PockodeSection() {
 	useEffect(() => {
 		const ended = useWSStore.getState().serverUpdate;
 		if (ended?.phase !== "failed" && ended?.phase !== "lost") return;
-		if (!checkInfo || answeredAt <= ended.endedAt) return;
+		// Both are millisecond readings, and the check the ending starts can
+		// answer within the same one; only the newest read's answer is kept, so
+		// one at that very millisecond is that check's.
+		if (!checkInfo || answeredAt < ended.endedAt) return;
 		const offered = checkInfo.candidates.some(
 			(c) => c.version === ended.candidate.version,
 		);
