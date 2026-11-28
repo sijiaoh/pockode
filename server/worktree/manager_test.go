@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/watch"
 	"github.com/pockode/server/work"
@@ -747,5 +748,35 @@ func TestPruningEmptyParentsDoesNotBreakAStoreOpeningUnderThem(t *testing.T) {
 				t.Fatalf("deleting %s, round %d: sessions on disk at %s = %v, want sess-1", deleted, round, opening, got)
 			}
 		}
+	}
+}
+
+// Stopping a worktree hands its directory to readers that go to the file, so
+// whatever its session store was still holding has to be written by then.
+func TestWorktreeStop_WritesWhatTheSessionStoreHeld(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := session.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("session.NewFileStore: %v", err)
+	}
+	if _, err := store.Create(context.Background(), "sess-1", session.CreateSpec{}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := store.SetUnread(context.Background(), "sess-1", true); err != nil {
+		t.Fatalf("SetUnread: %v", err)
+	}
+	wt := &Worktree{
+		SessionStore:   store,
+		ProcessManager: process.NewManager(agent.NewRegistry(), "", t.TempDir(), dataDir, "", store, session.LeaseBudgets{}),
+	}
+
+	wt.Stop()
+
+	meta, found, err := session.NewDirReader(dataDir).Get("sess-1")
+	if err != nil || !found {
+		t.Fatalf("Get = found %v, err %v", found, err)
+	}
+	if !meta.Unread {
+		t.Error("the unread change was still only in memory after Stop")
 	}
 }

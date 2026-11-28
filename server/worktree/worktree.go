@@ -3,6 +3,7 @@ package worktree
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -128,7 +129,10 @@ func (w *Worktree) Start() error {
 // the data directory and the work tree are free to be torn down. Watchers go
 // first because they are the half that polls the work tree; the processes then
 // get however long they need to drain. The permission reviews go before
-// them, so that no timeout fires into a process on its way out.
+// them, so that no timeout fires into a process on its way out. The session
+// store closes last, after the processes' endings have been folded into it, so
+// what it still held in memory is on disk before anything reads the file in its
+// place.
 func (w *Worktree) Stop() {
 	for _, watcher := range w.watchers {
 		watcher.Stop()
@@ -137,6 +141,11 @@ func (w *Worktree) Stop() {
 		w.PermissionReviews.Close()
 	}
 	w.ProcessManager.Shutdown()
+	if w.SessionStore != nil {
+		if err := w.SessionStore.Close(); err != nil {
+			slog.Error("failed to write the session index on worktree stop", "worktree", w.Name, "error", err)
+		}
+	}
 }
 
 // Watchers returns all watchers managed by this worktree.

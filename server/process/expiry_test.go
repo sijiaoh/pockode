@@ -192,7 +192,7 @@ func (r *recordingListener) snapshot() []ChatMessage {
 // number before the one below it, to a client that uses those numbers to page
 // and to anchor forks.
 func TestExpiry_IsAnnouncedAfterTheEventThatCausedIt(t *testing.T) {
-	m, mock, store, proc := startedTurn(t, leaseTestBudgets)
+	m, mock, _, proc := startedTurn(t, leaseTestBudgets)
 	listener := &recordingListener{}
 	m.SetMessageListener(listener)
 	sess := mock.session(t, "sess-1")
@@ -201,19 +201,22 @@ func TestExpiry_IsAnnouncedAfterTheEventThatCausedIt(t *testing.T) {
 	waitUntil(t, "the prompt", func() bool { return proc.turnState().AwaitingAnswerTo("req-1") })
 
 	sess.emit(t, agent.InterruptedEvent{})
-	waitUntil(t, "the expiry", func() bool {
-		return expiryReasonFor(t, store, "req-1") != "unrecorded"
-	})
-
+	// Waited on through the broadcasts rather than the history: an expiry is
+	// written before it is announced, so its record alone says nothing about
+	// what the listener has been handed yet.
 	var order []agent.EventType
 	var seqs []session.HistorySeq
-	for _, msg := range listener.snapshot() {
-		switch msg.Event.(type) {
-		case agent.InterruptedEvent, agent.RequestCancelledEvent:
-			order = append(order, msg.Event.EventType())
-			seqs = append(seqs, msg.Seq)
+	waitUntil(t, "the expiry to be announced", func() bool {
+		order, seqs = nil, nil
+		for _, msg := range listener.snapshot() {
+			switch msg.Event.(type) {
+			case agent.InterruptedEvent, agent.RequestCancelledEvent:
+				order = append(order, msg.Event.EventType())
+				seqs = append(seqs, msg.Seq)
+			}
 		}
-	}
+		return len(order) == 2
+	})
 	want := []agent.EventType{agent.EventTypeInterrupted, agent.EventTypeRequestCancelled}
 	if !slices.Equal(order, want) {
 		t.Fatalf("broadcast order = %v, want %v", order, want)

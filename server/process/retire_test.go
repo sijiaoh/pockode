@@ -26,15 +26,21 @@ func TestRetire_CancelsThePromptsNobodyWillAnswer(t *testing.T) {
 
 	m.RetireSession("sess-1")
 
-	waitUntil(t, "the prompts to be withdrawn", func() bool {
-		return len(proc.turnState().Blockers) == 0
-	})
-
+	// Waited on through the records, not the turn: an event's turn change is
+	// decided before its record is written (see handleEvent), so a turn with no
+	// blockers left can still be ahead of the last cancellation's record.
 	cancelled := map[string]agent.CancelReason{}
-	for _, record := range historyRecords(t, store, "sess-1") {
-		if record.Type == agent.EventTypeRequestCancelled {
-			cancelled[record.RequestID] = record.Reason
+	waitUntil(t, "the prompts to be withdrawn", func() bool {
+		clear(cancelled)
+		for _, record := range historyRecords(t, store, "sess-1") {
+			if record.Type == agent.EventTypeRequestCancelled {
+				cancelled[record.RequestID] = record.Reason
+			}
 		}
+		return len(cancelled) == 2
+	})
+	if blockers := proc.turnState().Blockers; len(blockers) != 0 {
+		t.Errorf("blockers after the withdrawal = %v, want none", blockers)
 	}
 	for _, requestID := range []string{"req-1", "req-2"} {
 		if got := cancelled[requestID]; got != agent.ReasonWorkClosed {
