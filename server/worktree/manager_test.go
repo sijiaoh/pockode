@@ -600,3 +600,152 @@ func TestForceShutdown_RemovesADataDirectoryWithNoSessionsLeft(t *testing.T) {
 		t.Errorf("the data directory of a deleted worktree with no sessions is still there: %v", err)
 	}
 }
+
+// A worktree named after a branch with a slash in it — `fix/foo`, the shape of
+// most branch names — keeps its data two levels down. Every such directory is a
+// source under its full name, whether the worktree is still there or not, and
+// the levels in between are not worktrees of their own; nor does one that is a
+// worktree's hide the worktrees below it.
+func TestSessionSources_NamesWithSlashes(t *testing.T) {
+	repo := initGitRepo(t)
+	dataDir := t.TempDir()
+	registry := NewRegistry(repo, dataDir)
+	live := filepath.Join("fix", "live")
+	if _, _, err := registry.EnsureWorktree(live); err != nil {
+		t.Fatalf("EnsureWorktree: %v", err)
+	}
+	m := &Manager{registry: registry, dataDir: dataDir, worktrees: make(map[string]*Worktree)}
+
+	gone := filepath.Join("fix", "gone")
+	deep := filepath.Join("feature", "a", "b")
+	createSessionIn(t, m, live, "sess-live")
+	createSessionIn(t, m, gone, "sess-gone")
+	createSessionIn(t, m, deep, "sess-deep")
+	createSessionIn(t, m, "feature", "sess-feature")
+
+	sources, err := m.SessionSources()
+	if err != nil {
+		t.Fatalf("SessionSources: %v", err)
+	}
+	got := make(map[string]SessionSource)
+	for _, s := range sources {
+		got[s.Name] = s
+	}
+	want := map[string]bool{"feature": false, deep: false, gone: false, live: true}
+	if len(got) != len(want) {
+		t.Errorf("sources = %+v, want exactly %v", sources, want)
+	}
+	for name, exists := range want {
+		s, ok := got[name]
+		if !ok {
+			t.Errorf("no source for %q in %+v", name, sources)
+			continue
+		}
+		if s.Exists != exists || s.SessionCount != 1 {
+			t.Errorf("source %q = %+v, want Exists=%v with one session", name, s, exists)
+		}
+	}
+}
+
+// Pruning a nested worktree takes the levels its name made with it once
+// nothing else is in them — and only then.
+func TestDeleteSession_LastOneInANestedWorktreeTakesEmptyParentsWithIt(t *testing.T) {
+	name := filepath.Join("fix", "a", "x")
+	m, dataDir := managerOverDeletedWorktree(t, name, "sess-1")
+	sibling := filepath.Join("fix", "b")
+	createSessionIn(t, m, sibling, "sess-sibling")
+
+	if err := m.DeleteSession(context.Background(), name, "sess-1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	worktrees := filepath.Join(dataDir, "worktrees")
+	for _, gone := range []string{name, filepath.Join("fix", "a")} {
+		if _, err := os.Stat(filepath.Join(worktrees, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s is still there: %v", gone, err)
+		}
+	}
+	if got := sessionIDsIn(t, m, sibling); len(got) != 1 {
+		t.Errorf("sessions of the sibling worktree = %v, want sess-sibling", got)
+	}
+
+	if err := m.DeleteSession(context.Background(), sibling, "sess-sibling"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktrees, "fix")); !os.IsNotExist(err) {
+		t.Errorf("fix is still there with nothing under it: %v", err)
+	}
+	if _, err := os.Stat(worktrees); err != nil {
+		t.Errorf("the worktrees data dir itself went: %v", err)
+	}
+}
+
+// `fix` and `fix/foo` are both worktree names, and the second's data lives
+// inside the first's directory: emptying `fix` must leave `fix/foo` alone.
+func TestDeleteSession_PruningKeepsANestedWorktreesData(t *testing.T) {
+	m, dataDir := managerOverDeletedWorktree(t, "fix", "sess-1")
+	nested := filepath.Join("fix", "foo")
+	createSessionIn(t, m, nested, "sess-nested")
+
+	if err := m.DeleteSession(context.Background(), "fix", "sess-1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dataDir, "worktrees", "fix", "sessions")); !os.IsNotExist(err) {
+		t.Errorf("the emptied worktree's sessions directory is still there: %v", err)
+	}
+	if got := sessionIDsIn(t, m, nested); len(got) != 1 || got[0] != "sess-nested" {
+		t.Errorf("sessions of the nested worktree = %v, want sess-nested", got)
+	}
+	sources, err := m.SessionSources()
+	if err != nil {
+		t.Fatalf("SessionSources: %v", err)
+	}
+	if len(sources) != 1 || sources[0].Name != nested {
+		t.Errorf("sources = %+v, want only %s", sources, nested)
+	}
+}
+
+// Pruning climbs into directories another worktree's name runs through: a
+// deleted `fix` (or `fix/a`) takes `fix` with it once it is empty, at the very
+// moment a store may be opening at `fix/b`. The store must open, keep its
+// directory, and take its first write, however the two interleave.
+func TestPruningEmptyParentsDoesNotBreakAStoreOpeningUnderThem(t *testing.T) {
+	repo := initGitRepo(t)
+	dataDir := t.TempDir()
+	// Nothing is ever created in the registry, so every name resolves as a
+	// worktree that is gone — which is what lets pruning go ahead.
+	registry := NewRegistry(repo, dataDir)
+	m := &Manager{registry: registry, dataDir: dataDir, worktrees: make(map[string]*Worktree)}
+
+	opening := filepath.Join("fix", "b")
+	for _, deleted := range []string{"fix", filepath.Join("fix", "a")} {
+		for round := range 50 {
+			if err := os.RemoveAll(filepath.Join(dataDir, "worktrees")); err != nil {
+				t.Fatal(err)
+			}
+			// A deleted worktree whose last session is gone.
+			if _, err := session.NewFileStore(m.dataDirFor(deleted)); err != nil {
+				t.Fatal(err)
+			}
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				m.pruneEmptySessionData(deleted, m.dataDirFor(deleted))
+			}()
+			store, err := m.openSessionStore(m.dataDirFor(opening))
+			if err == nil {
+				_, err = store.Create(context.Background(), "sess-1", session.CreateSpec{})
+			}
+			wg.Wait()
+			if err != nil {
+				t.Fatalf("deleting %s, round %d: the store at %s failed: %v", deleted, round, opening, err)
+			}
+			if got := sessionIDsIn(t, m, opening); len(got) != 1 {
+				t.Fatalf("deleting %s, round %d: sessions on disk at %s = %v, want sess-1", deleted, round, opening, got)
+			}
+		}
+	}
+}

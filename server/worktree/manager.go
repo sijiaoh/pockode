@@ -16,6 +16,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chat"
+	"github.com/pockode/server/internal/pathutil"
 	"github.com/pockode/server/permreview"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
@@ -57,6 +58,12 @@ type Manager struct {
 	// returned: its processes may still be running, and ReleaseProfile has to
 	// see them. Guarded by mu; see unloadLocked.
 	stopping map[*Worktree]struct{}
+
+	// dataDirMu keeps pruning a deleted worktree's data directory from removing
+	// a directory a store is being opened under: openSessionStore holds it for
+	// reading, the removing half of pruneEmptySessionData for writing. Separate
+	// from mu, because both sides do file I/O.
+	dataDirMu sync.RWMutex
 }
 
 func NewManager(registry *Registry, agents *agent.Registry, dataDir string, budgets session.LeaseBudgets) *Manager {
@@ -365,12 +372,56 @@ func (m *Manager) pruneEmptySessionData(name, dir string) {
 		return
 	}
 
-	if err := os.RemoveAll(dir); err != nil {
+	// From the walk to the last parent removed: what the walk found nested has
+	// to still be all there is when the directory goes, and a parent found
+	// empty has to still be empty — neither holds while a store may be opening
+	// underneath (see openSessionStore).
+	m.dataDirMu.Lock()
+	defer m.dataDirMu.Unlock()
+
+	// A worktree's directory is entirely its own except where another
+	// worktree's name continues it: `fix` and `fix/foo` are both legal names,
+	// and the second's data lives inside the first's directory.
+	root := m.worktreesDataDir()
+	// Only on a complete walk: a directory that could not be read may be
+	// exactly where a nested worktree's sessions are.
+	nested, complete, err := worktreeDataNames(root, dir)
+	if err != nil || !complete {
+		slog.Warn("could not check a deleted worktree's data directory for nested worktrees; leaving it in place",
+			"worktree", name, "error", err)
+		return
+	}
+	target := dir
+	if len(nested) > 0 {
+		target = filepath.Join(dir, sessionsDirName)
+	}
+	if err := os.RemoveAll(target); err != nil {
 		slog.Warn("failed to remove the data directory of a deleted worktree",
 			"worktree", name, "error", err)
 		return
 	}
+	removeEmptyParents(filepath.Dir(dir), root)
 	slog.Info("removed the data directory of a deleted worktree with no sessions left", "worktree", name)
+}
+
+// removeEmptyParents removes dir and each parent above it up to, not including,
+// root, stopping at the first that is not empty. These are the directories a
+// slash in a worktree name (`fix/foo`) put there, which hold nothing of their
+// own; once the last worktree under one is gone it is only clutter.
+//
+// os.Remove refuses a directory with anything in it, which is what makes this
+// safe, and a refusal is the ordinary way the climb ends — so it is not
+// reported.
+func removeEmptyParents(dir, root string) {
+	for {
+		if _, inside := pathutil.ChildName(dir, root); !inside {
+			return
+		}
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
 }
 
 // SessionTurns implements work.TurnSource, so a work's activity can be derived
@@ -789,7 +840,68 @@ func dataDirFor(dataDir, name string) string {
 	if name == "" {
 		return dataDir
 	}
-	return filepath.Join(dataDir, "worktrees", name)
+	return filepath.Join(worktreesDataDir(dataDir), name)
+}
+
+func (m *Manager) worktreesDataDir() string {
+	return worktreesDataDir(m.dataDir)
+}
+
+func worktreesDataDir(dataDir string) string {
+	return filepath.Join(dataDir, "worktrees")
+}
+
+// sessionsDirName is the one directory every worktree's data directory has
+// (see session.NewFileStore), and so what marks a directory under the worktrees
+// data dir as a worktree's rather than a step of a name with a slash in it.
+const sessionsDirName = "sessions"
+
+// worktreeDataNames walks start, which is root or a directory below it, and
+// returns the name of every worktree whose data directory lies beneath start.
+// root is the worktrees data dir; a name is the data directory's path relative
+// to it, so `fix/foo` comes back whole — in native separators, as the registry
+// names worktrees.
+//
+// A directory is a worktree's when it has a sessions directory. That is
+// ambiguous in exactly one case — a worktree named `x/sessions` stores its data
+// where `x` keeps its sessions — and it is read as the latter, which is the
+// layout every worktree has rather than one a name would have to choose. The
+// walk does not go into a sessions directory either: the sessions are there,
+// not further worktrees, and there can be many.
+//
+// A subdirectory that cannot be read is skipped with a warning, so it does not
+// hide the worktrees beside it; complete reports whether any was.
+func worktreeDataNames(root, start string) (names []string, complete bool, err error) {
+	complete = true
+	err = filepath.WalkDir(start, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if path == start {
+				if errors.Is(err, fs.ErrNotExist) {
+					return fs.SkipAll
+				}
+				return err
+			}
+			slog.Warn("skipping an unreadable worktree data directory", "path", path, "error", err)
+			complete = false
+			return fs.SkipDir
+		}
+		if path == start || !d.IsDir() {
+			return nil
+		}
+		parent := filepath.Dir(path)
+		if d.Name() != sessionsDirName || parent == root {
+			return nil
+		}
+		if parent != start {
+			name, _ := pathutil.ChildName(parent, root)
+			names = append(names, name)
+		}
+		return fs.SkipDir
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("read worktree data directories: %w", err)
+	}
+	return names, complete, nil
 }
 
 // SessionUsages implements work.SessionUsageSource, so a work item's detail can
@@ -877,16 +989,12 @@ func (m *Manager) SessionSources() ([]SessionSource, error) {
 		existing[info.Name] = true
 	}
 
-	names := []string{""}
-	entries, err := os.ReadDir(filepath.Join(m.dataDir, "worktrees"))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("read worktree data directories: %w", err)
+	root := m.worktreesDataDir()
+	nested, _, err := worktreeDataNames(root, root)
+	if err != nil {
+		return nil, err
 	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			names = append(names, entry.Name())
-		}
-	}
+	names := append([]string{""}, nested...)
 
 	sources := make([]SessionSource, 0, len(names))
 	for _, name := range names {
@@ -920,7 +1028,7 @@ func (m *Manager) SessionSources() ([]SessionSource, error) {
 func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	wtDataDir := m.dataDirFor(name)
 
-	sessionStore, err := session.NewFileStore(wtDataDir)
+	sessionStore, err := m.openSessionStore(wtDataDir)
 	if err != nil {
 		return nil, fmt.Errorf("create session store: %w", err)
 	}
@@ -1010,6 +1118,27 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	}
 
 	return wt, nil
+}
+
+// openSessionStore opens the store over a worktree's data directory, making the
+// directory if it is not there yet.
+//
+// The making is done under dataDirMu, for reading, because the directory's
+// parents may be on their way out: a slash in a name puts this worktree's data
+// under directories other worktrees' names run through (`fix/b` under `fix`),
+// and pruning one of those removes them once they look empty. Once the sessions
+// directory exists the parents are not empty, and every later write lands
+// inside a directory pruning will see — so only the making needs covering, and
+// the store's own opening (which reads every session's history) is left
+// outside, where it holds up nobody.
+func (m *Manager) openSessionStore(dir string) (*session.FileStore, error) {
+	m.dataDirMu.RLock()
+	err := os.MkdirAll(filepath.Join(dir, sessionsDirName), 0755)
+	m.dataDirMu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+	return session.NewFileStore(dir)
 }
 
 // maybeCleanup cleans up the worktree if it's idle and matches the given pointer.
