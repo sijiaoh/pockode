@@ -3,6 +3,9 @@ package chat
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -514,6 +517,47 @@ func TestFork_AnchorNamesTheRecordTheClientSaw(t *testing.T) {
 	}
 	if len(history) != 4 {
 		t.Errorf("kept %d records, want 4", len(history))
+	}
+}
+
+// TestFork_AnchorIsTheStoredSeqAcrossAGap: seqs are stored and can have gaps
+// (a power loss takes an unsynced tail), so an anchor is found by its seq, not
+// by position; and the copy, a different session, is numbered from 1.
+func TestFork_AnchorIsTheStoredSeqAcrossAGap(t *testing.T) {
+	f := newForkFixture(t, &forkingAgent{carried: true}, nil)
+	lines := strings.Join([]string{
+		`{"seq":1,"v":2,"type":"message","content":"first"}`,
+		`{"seq":2,"v":2,"type":"text","content":"before the gap"}`,
+		`{"seq":6,"v":2,"type":"text","content":"the record the user anchors on"}`,
+		`{"seq":7,"v":2,"type":"done"}`,
+	}, "\n") + "\n"
+	path := filepath.Join(f.dataDir, "sessions", "source", "history.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(lines), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.client.Fork(context.Background(), "source", 3, ""); !errors.Is(err, ErrForkAnchorOutOfRange) {
+		t.Errorf("anchor in the gap: err = %v, want ErrForkAnchorOutOfRange", err)
+	}
+
+	meta, err := f.client.Fork(context.Background(), "source", 6, "")
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	history := forkedHistory(t, f.store, meta.ID)
+	if text, ok := history[len(history)-1].(agent.TextRecord); !ok || text.Content != "the record the user anchors on" {
+		t.Errorf("fork ends at %+v, want the anchored record", history[len(history)-1])
+	}
+
+	records, err := f.store.GetHistory(context.Background(), meta.ID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if got := session.HistorySeqs(records); !slices.Equal(got, []session.HistorySeq{1, 2, 3}) {
+		t.Errorf("fork's seqs = %v, want [1 2 3]", got)
 	}
 }
 

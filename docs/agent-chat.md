@@ -408,6 +408,16 @@ the rest costs transport, parsing and memory for records nobody looks at.
   computes the cursor rather than letting the client read `history[0].seq`,
   because a record it could not stamp — one that is not a JSON object — carries
   no `seq` at all and would strand paging at that point.
+- A `seq` is an address only for as long as the server process that handed it
+  out: appends are not fsynced, so a power loss can drop a tail the client
+  already holds, and the restarted server gives those seqs to different
+  records. The `auth` reply's `server_instance` (`rpc.AuthResult.ServerInstance`)
+  is new on every process start, and a connection never outlives its process,
+  so every seq a connection carries belongs to the instance its `auth` named.
+  Seqs held from a connection whose `server_instance` differs from the current
+  one are to be replaced by a fresh snapshot (`chat.messages.subscribe`), never
+  continued from with a cursor. Nothing in the client acts on it yet; it is the
+  contract a resuming stream will build on.
 - `server_time` is the server's clock as the reply was built. A call still
   running in `history` is counted from its `observed_at`
   ([agent-integration.md](code/agent-integration.md)) against this reading plus
@@ -415,9 +425,12 @@ the rest costs transport, parsing and memory for records nobody looks at.
   same rule as the turn's `open_elapsed_ms`.
 - `limit` of `0` means `session.DefaultHistoryPageSize` (50); anything above
   `session.MaxHistoryPageSize` (500) is clamped. A negative `limit` and a
-  `before_seq` naming no record are both refused with an invalid-params error —
-  answering an unusable cursor with the newest page would silently restart the
-  client's scrollback from the bottom.
+  `before_seq` past the newest record are both refused with an invalid-params
+  error — answering an unusable cursor with the newest page would silently
+  restart the client's scrollback from the bottom. A `before_seq` inside a gap
+  (seqs are not dense, see
+  [agent-integration.md](code/agent-integration.md#history-storage)) is not
+  unusable: it still means "older than this".
 - A page can hold more than `limit` records: it starts early enough to hold the
   call of every subagent whose work it holds (nested ones included), as far back
   as `session.MaxHistoryPageSize` records from its end. A boundary between a

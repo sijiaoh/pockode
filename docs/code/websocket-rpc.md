@@ -651,7 +651,8 @@ Client                              Server
   │     max_upload_size,               │
   │     max_attachment_size,           │
   │     max_image_preview_size,        │
-  │     session_token }                │
+  │     session_token,                 │
+  │     server_instance }              │
   │◀───────────────────────────────────┤
   │                                    │
   │   (Authenticated - can send other requests)
@@ -703,6 +704,10 @@ Client                              Server
   follows it with `remote_url.subscribe`
   ([Following the Remote URL](#following-the-remote-url)). A client cannot
   derive it from its own location, which is `localhost` on a local connection.
+- `server_instance` names the server process that answered and is new on every
+  start; it is what tells a client whether the history seqs it holds can still
+  be continued from or must be replaced by a fresh snapshot
+  ([agent-chat.md § History Paging](../agent-chat.md#history-paging)).
 
 For where the server's password comes from (`--password` / `POCKODE_PASSWORD`), how a session token is issued and expired, and the overall trust model, see [Authentication](authentication.md).
 

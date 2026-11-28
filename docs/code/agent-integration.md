@@ -717,8 +717,9 @@ round. `agent/history_compat_test.go` freezes that flat struct
 (`legacyEventRecord`) and holds every type in `WireTypes` to it.
 
 **Replay does not go through these types.** A history page hands the client the
-line as it is on disk — replay adds a `seq` and changes nothing else, because
-`session.stampHistorySeq` round-trips through a raw field map
+line as it is on disk — replay puts the record's `seq` in front, drops the
+line's format version and changes nothing else, because
+`session.stampHistorySeq` splices bytes rather than decoding the record
 (`TestStampHistorySeq_KeepsFieldsThisBuildHasNoNameFor`) — so a field a newer
 server wrote reaches the client even through a build that has no name for it.
 The types are the source of truth for what Pockode *writes*, and for what Go
@@ -5099,7 +5100,8 @@ the situation it is meant to rescue.
 
 ### History Storage
 
-History is stored in JSON Lines format, one `agent.Record` per line:
+History is stored in JSON Lines format, one `agent.Record` per line behind a
+small envelope (see "The seq is stored in the record" below):
 
 ```
 <dataDir>/sessions/<sessionID>/history.jsonl
@@ -5123,13 +5125,13 @@ goes there, what only gets described, and what a fork does with it are in
 - The next append terminates an unterminated trailing line before writing, so a
   partial line left by a crash cannot swallow the following record.
 - Reads skip lines that are not valid JSON, or longer than the 9 MiB line limit.
-  That limit covers `agent.MaxLineBytes` (8 MiB) **plus an envelope**, so a
+  That limit covers `agent.MaxLineBytes` (8 MiB) **plus headroom**, so a
   record we were able to append is never one we then refuse to load back: the
-  record is the CLI event wrapped in the record's own JSON, so two equal
-  ceilings would leave an envelope's worth of payloads writable and unreadable
-  (`agent.TestLineLimitsCoverHistory`). The rest of the conversation stays
-  loadable, and the count is reported so the session store can log it and
-  surface a `warning` record in the chat.
+  line is the CLI event wrapped in the record's own JSON and the seq envelope,
+  so two equal ceilings would leave that wrapping's worth of payloads writable
+  and unreadable (`agent.TestLineLimitsCoverHistory`). The rest of the
+  conversation stays loadable, and the count is reported so the session store
+  can log it and surface a `warning` record in the chat.
 - That ceiling is a limit and not an allocation: `ReadJSONL` assembles a line
   above a 64 KiB read buffer rather than buffering the whole of it. Buffering
   the ceiling made reading an 8 KiB history cost the whole ceiling — measured at
@@ -5154,13 +5156,15 @@ lost, there is no longer a session to lose it from. The memory is cleared when t
 same id is created again (a work restarts its deleted session under its own id),
 and needs no persisting, since a session deleted by an earlier run has no process
 left in this one. The ordering that keeps an in-flight append from slipping
-between the check and the removal is in the comment on `FileStore.historyMu`.
+between the check and the removal is in the comment on `session.sessionHistory`:
+the tombstone and the newest seq are kept per session, under a lock of that
+session's own, so counting one large history on its first append never holds up
+another session's stream.
 
-**Naming a record.** A client that needs to point at one record — forking is so
-far the only caller — quotes back a `session.HistorySeq`: the record's 1-based
-position in what `GetHistory` returns. The server hands the number out, on
-replayed history (`stampHistorySeq`) and on every `chat.*` notification of a
-persisted event alike, and the client only ever reads it back.
+**Naming a record.** A client that needs to point at one record — paging back
+and forking so far — quotes back a `session.HistorySeq`. The server hands the
+number out, on replayed history (`stampHistorySeq`) and on every `chat.*`
+notification of a persisted event alike, and the client only ever reads it back.
 
 **Counting records client-side is the trap the number exists to close.** Not
 every record reaches every client as a notification: the tab that sent a message
@@ -5171,15 +5175,53 @@ then cut somewhere the user never chose. The seqs a client knows can be sparse
 for the same reason, which is harmless: it can only anchor on a record it has
 seen.
 
-Sequence numbers are stamped on the way out and never written to the file. A seq
-is a record's address in one session's history, not part of what happened, and a
-stored one would be copied into a fork and go on naming a position it no longer
-holds. Nothing is lost by not storing them: the counter is seeded by counting the
-records already in the file, so numbering picks up where it left off across
-restarts. The one record carrying a seq of its own is the synthetic warning
+**The seq is stored in the record.** Each line `AppendToHistory` writes is the
+record's own JSON behind an envelope, `{"seq":N,"v":2,` and then the record's
+fields (`session/history_envelope.go`). `seq` is assigned under the session's
+lock, one past the newest record's, and written before the lock is released,
+so seqs reach the file in the order they were handed out. `v` is the line's
+format version, so a later change has something to key a migration on; a line
+without one is version 1. The envelope adds nothing else — no timestamp:
+`observed_at` stays the record's own field, present only where the moment was
+honestly observed.
+
+Seqs are unique and increasing within a session, but not dense. Appends are not
+fsynced, so a power loss can drop a tail whose seqs clients were already told,
+and the counter, seeded from what survived on disk, hands them out again. Paging
+(`PageHistory`'s `before_seq`) and fork anchors (`FindHistorySeq`) therefore go
+by the stored numbers, never by position, and a `before_seq` inside a gap still
+means "older than this". Telling a reused seq from the one a client saw is the
+wire's job, not the file's: a power loss always comes with a restart, and the
+`auth` reply's `server_instance` changes on every one
+([agent-chat.md](../agent-chat.md#history-paging)).
+
+**Old files are upgraded in memory, never rewritten.** `session.HistorySeqs`
+numbers a record carrying no seq one past the record before it. A file written
+entirely before seqs were stored therefore numbers exactly as positions among
+its readable records always did — damaged lines are skipped by the reader, take
+no number and still produce the "skipped N entries" warning — so the anchors,
+`before_seq` cursors and fork points clients already hold keep naming the same
+records. A file whose old prefix is followed by new lines numbers on from the
+old ones, because the counter was seeded by numbering them; so do flat lines a
+downgraded server appended later. A new line is a superset of a version-1
+record, so a downgraded server and `DirReader` (which never writes) read it as
+before. What a downgraded server cannot do is address records by stored seqs
+with gaps in them: it pages and forks by position, so in a history with a gap
+its cursors and fork anchors past the gap name the wrong record. Reading is
+what the compatibility promises.
+
+Replay sends the seq without the version: the version belongs to the file, not
+to the event.
+
+**A fork's copy is renumbered.** `TruncateHistory` drops calls the cut left
+unsettled, so the copy is not a prefix of the source, and the source's seqs are
+addresses in the source. `WriteHistory` numbers what it writes from 1.
+
+The one record carrying a seq that is not its own is the synthetic warning
 `GetHistory` appends when the file was damaged: `NoHistorySeq` (0), "not
-addressable", because it is in no file and the next real append takes the
-position it would otherwise appear to hold.
+addressable", because it is in no file and the next real append takes the seq
+it would otherwise appear to hold. A page never starts on it, since a page's
+first seq is the cursor for the page before.
 
 ### The Session Index
 

@@ -37,19 +37,21 @@ type HistoryPage struct {
 	// NoHistorySeq when HasMore is false.
 	//
 	// The server computes it instead of letting the client read the first
-	// record's seq, because a record it could not stamp carries no seq at all and
-	// would strand paging at that point.
+	// record's seq, because a record that is not a JSON object has nowhere to
+	// carry one and would strand paging at that point.
 	NextBeforeSeq HistorySeq
 }
 
 // PageHistory returns the newest limit records older than beforeSeq.
 //
 // beforeSeq is exclusive: NoHistorySeq asks for the newest page, and any other
-// value asks for the records that precede the record it names. limit of zero
-// means DefaultHistoryPageSize; anything above MaxHistoryPageSize is clamped.
+// value asks for the records that precede the record it names. It need not name
+// one that still exists — seqs can have gaps (see HistorySeq) — but it cannot be
+// past the newest. limit of zero means DefaultHistoryPageSize; anything above
+// MaxHistoryPageSize is clamped.
 //
-// records must be the whole history as GetHistory returned it, because a
-// sequence number is a position in exactly that sequence.
+// records must be the whole history as GetHistory returned it: a record written
+// before seqs were stored is numbered by its place in the whole of it.
 func PageHistory(records []json.RawMessage, beforeSeq HistorySeq, limit int) (HistoryPage, error) {
 	if limit < 0 {
 		return HistoryPage{}, fmt.Errorf("%w: limit %d is negative", ErrInvalidHistoryLimit, limit)
@@ -61,18 +63,17 @@ func PageHistory(records []json.RawMessage, beforeSeq HistorySeq, limit int) (Hi
 		limit = MaxHistoryPageSize
 	}
 
+	seqs := HistorySeqs(records)
 	end := len(records)
 	if beforeSeq != NoHistorySeq {
 		if beforeSeq < NoHistorySeq {
 			return HistoryPage{}, fmt.Errorf("%w: seq %d is not a record address", ErrInvalidHistoryCursor, beforeSeq)
 		}
-		if beforeSeq > HistorySeq(len(records)) {
-			return HistoryPage{}, fmt.Errorf("%w: seq %d is past the end of a %d record history",
-				ErrInvalidHistoryCursor, beforeSeq, len(records))
+		if last := lastHistorySeq(seqs); beforeSeq > last {
+			return HistoryPage{}, fmt.Errorf("%w: seq %d is past the newest record, seq %d",
+				ErrInvalidHistoryCursor, beforeSeq, last)
 		}
-		// The record at seq s sits at index s-1, so everything older than it is
-		// what comes before that index.
-		end = beforeSeq.Index()
+		end = olderThan(seqs, beforeSeq)
 	}
 
 	start := end - limit
@@ -80,14 +81,42 @@ func PageHistory(records []json.RawMessage, beforeSeq HistorySeq, limit int) (Hi
 		start = 0
 	}
 	start = backToSubagentCalls(records, start, end)
+	start = backToNumbered(seqs, start)
 
-	page := HistoryPage{Records: stampHistorySeq(records[start:end], HistorySeq(start+1))}
+	page := HistoryPage{Records: stampHistorySeq(records[start:end], seqs[start:end])}
 	if start > 0 {
 		page.HasMore = true
-		// Records[0] is at index start, whose seq is start+1.
-		page.NextBeforeSeq = HistorySeq(start + 1)
+		page.NextBeforeSeq = seqs[start]
 	}
 	return page, nil
+}
+
+// olderThan returns how many of the records come before seq. A record with no
+// seq of its own goes with the numbered record before it, which is what
+// backToNumbered keeps a page boundary consistent with.
+func olderThan(seqs []HistorySeq, seq HistorySeq) int {
+	prev := NoHistorySeq
+	for i, s := range seqs {
+		if s.Valid() {
+			prev = s
+		}
+		if prev >= seq {
+			return i
+		}
+	}
+	return len(seqs)
+}
+
+// backToNumbered moves a page's start back onto a record that has a seq. The
+// next page's cursor is the seq of this page's first record, and a record with
+// none — the warning GetHistory synthesizes, the newest record of all — could
+// not be one: a page holding only it would point the next request back at
+// itself.
+func backToNumbered(seqs []HistorySeq, start int) int {
+	for start > 0 && !seqs[start].Valid() {
+		start--
+	}
+	return start
 }
 
 // backToSubagentCalls moves a page's start back far enough to hold the call of

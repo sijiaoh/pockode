@@ -123,10 +123,11 @@ export interface WatchedStory {
 }
 
 /**
- * One history record's address: its 1-based position in the session's history,
- * assigned by the server and only ever quoted back. Never counted client-side —
- * some records are written without being broadcast, so a local counter drifts
- * and a fork would then cut in the wrong place (docs/session-fork-ui.md).
+ * One history record's address: unique and increasing within the session, not
+ * promised to be dense, assigned by the server and only ever quoted back. Never
+ * counted client-side — some records are written without being broadcast, so a
+ * local counter drifts and a fork would then cut in the wrong place
+ * (docs/session-fork-ui.md) — and never computed with: there can be gaps.
  */
 export type HistorySeq = number;
 
@@ -1075,6 +1076,15 @@ export interface AuthResult {
 	 * unconditionally without tracking how the connection logged in.
 	 */
 	session_token: string;
+	/**
+	 * Names the server process that answered; new every time the server
+	 * starts. History seqs are not promised durable — a power loss can drop a
+	 * tail already seen, and the restarted server reuses those seqs — so seqs
+	 * held from a connection with a different value are to be replaced by a
+	 * fresh snapshot, not continued from. Opaque: compare it, never parse it.
+	 * Absent from servers that predate it.
+	 */
+	server_instance?: string;
 }
 
 /** What `remote_url.subscribe` replies with; see `AuthResult.remote_url`. */

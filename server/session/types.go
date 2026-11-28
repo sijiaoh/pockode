@@ -3,7 +3,6 @@ package session
 import (
 	"encoding/json"
 	"errors"
-	"strconv"
 	"time"
 )
 
@@ -100,8 +99,16 @@ func (m Mode) BypassesAgentGate() bool {
 	return m == ModeYolo || m == ModeUnattended
 }
 
-// HistorySeq names one record of a session's history: its 1-based position in
-// the sequence GetHistory returns.
+// HistorySeq names one record of a session's history. It is stored in the
+// record (see historyFormatVersion) and unique and increasing within the
+// session. A record stored without one is numbered one past the record before
+// it (HistorySeqs), so in a file written before seqs were stored it is the
+// 1-based position among readable records such a record was always given.
+//
+// It is not promised to be dense. Appends are not fsynced, so a power loss can
+// drop records a client was already told about, and the counter goes on from
+// what survived on disk. A client therefore never does arithmetic on one: it
+// quotes back a seq it was handed.
 //
 // It exists because a client cannot count history records for itself. It is
 // never told about every record that is stored — a permission or question answer
@@ -122,52 +129,30 @@ const NoHistorySeq HistorySeq = 0
 // Valid reports whether the sequence number names a record at all.
 func (s HistorySeq) Valid() bool { return s > 0 }
 
-// Index converts to a 0-based index into the records GetHistory returned. Only
-// meaningful for a Valid sequence number.
-func (s HistorySeq) Index() int { return int(s) - 1 }
-
-// stampHistorySeq returns the records with their sequence numbers written into
-// them, which is how a client learns what to quote back — see HistorySeq. The
-// stored records are left alone: a sequence number is a record's address in the
-// history, not part of the event that was recorded.
+// stampHistorySeq returns the records as a client gets them: each with its
+// seq in front and nothing else of the envelope it was stored in, so a
+// replayed record reads like the notification it was first sent as (see
+// watch.notifyParams). seqs are the records' own, from HistorySeqs over the
+// whole history — a page cannot be numbered on its own.
 //
-// firstSeq is where records[0] sits in the whole history, which is what makes
-// this usable on a page as well as on the whole of it: a record's address is its
-// position in the session's history, not in the slice it happens to be sent in,
-// so numbering a page from 1 would hand out the addresses of the oldest records
-// instead. PageHistory is the only caller; it is the one place that knows where
-// a page starts.
-//
-// Records are rewritten field by field rather than through a typed struct so
-// that a record written by another version of Pockode keeps every field it
-// arrived with.
-func stampHistorySeq(records []json.RawMessage, firstSeq HistorySeq) []json.RawMessage {
+// A record of an older format gets the seq it was always given, which is what
+// keeps the seqs clients hold valid; the file is not rewritten. One the store
+// synthesized keeps the NoHistorySeq it carries (see historyWarning).
+func stampHistorySeq(records []json.RawMessage, seqs []HistorySeq) []json.RawMessage {
 	stamped := make([]json.RawMessage, len(records))
 	for i, raw := range records {
-		fields := make(map[string]json.RawMessage)
-		if err := json.Unmarshal(raw, &fields); err != nil {
-			// Not a JSON object, so there is nothing to hang a field on. Passed
-			// through unchanged: the client still sees the record, it just cannot
-			// name it.
+		if !seqs[i].Valid() {
 			stamped[i] = raw
 			continue
 		}
-
-		if _, addressed := fields["seq"]; addressed {
-			// Already answered for: a record the store synthesized rather than read
-			// from the file says so by carrying seq 0, and must not be given the
-			// address of a record that does exist. See historyWarning.
-			stamped[i] = raw
-			continue
-		}
-
-		fields["seq"] = json.RawMessage(strconv.Itoa(int(firstSeq) + i))
-		out, err := json.Marshal(fields)
+		line, err := encodeWireRecord(raw, seqs[i])
 		if err != nil {
+			// Read off disk, so it is valid JSON; failing to take it apart only
+			// costs the client the ability to name it.
 			stamped[i] = raw
 			continue
 		}
-		stamped[i] = out
+		stamped[i] = line
 	}
 	return stamped
 }

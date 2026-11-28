@@ -539,12 +539,12 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 	if err != nil {
 		return session.SessionMeta{}, fmt.Errorf("read history: %w", err)
 	}
-	if !anchor.Valid() || anchor.Index() >= len(records) {
-		return session.SessionMeta{}, fmt.Errorf("%w: seq %d, the session has %d records",
-			ErrForkAnchorOutOfRange, int(anchor), len(records))
+	keepThrough, found := session.FindHistorySeq(records, anchor)
+	if !found {
+		return session.SessionMeta{}, fmt.Errorf("%w: seq %d names no record of the session",
+			ErrForkAnchorOutOfRange, int(anchor))
 	}
 
-	keepThrough := anchor.Index()
 	if isUserMessageRecord(records[keepThrough]) {
 		// They had not sent it yet at the moment this fork returns to. That the
 		// agent's own context stopped one message short of it anyway — the CLI
