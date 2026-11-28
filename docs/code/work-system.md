@@ -1821,7 +1821,9 @@ across a deleted worktree.** `DeleteWork`'s cascade (see
 which no longer gives up when the worktree is **gone**: an existing one is still
 deleted *through*, because a session there may have a live process to close and
 its store owns the directory, while a deleted one's index is rewritten on disk
-directly. Only `ErrWorktreeNotFound` takes that second branch — any other failure
+directly — once no store of it is left writing there
+([one writer per data directory](agent-integration.md#one-writer-per-data-directory)).
+Only `ErrWorktreeNotFound` takes that second branch — any other failure
 (a directory that is no longer a git repository, a worktree that exists but will
 not load) is still a failure, because deleting records from under a store that may
 yet open them is not a way of handling one. A session that belongs to no work is

@@ -36,6 +36,11 @@ type Worktree struct {
 
 	watchers []watch.Watcher // for unified lifecycle management
 
+	// writer is the claim on DataDir this worktree's store was opened under,
+	// given up once it has stopped (Manager.stopUnloaded). Nil for a worktree
+	// built outside the manager.
+	writer *dataDirWriter
+
 	// deleted is set when the worktree this holds was removed from disk. The
 	// object outlives that moment — connections are still bound to it, and its
 	// session store still reads — so it is what tells those connections that

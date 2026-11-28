@@ -27,6 +27,15 @@ import (
 
 const idleReleaseDelay = 30 * time.Second
 
+// writerReleaseTimeout bounds how long claimDataDir waits for the previous
+// writer of a worktree's data directory to let go. That writer is a session
+// deletion on a worktree that is gone, which takes an index write, or a
+// worktree still stopping, which takes as long as its processes take to drain —
+// bounded by process.Manager's own drain timeout — so this only runs out on a
+// stream that outlived the kill of its CLI. Failing then is the rule's point:
+// a second writer would be overwritten by the first.
+const writerReleaseTimeout = 30 * time.Second
+
 // Manager manages the lifecycle of worktrees with lazy creation and reference-counted cleanup.
 type Manager struct {
 	registry        *Registry
@@ -58,6 +67,16 @@ type Manager struct {
 	// returned: its processes may still be running, and ReleaseProfile has to
 	// see them. Guarded by mu; see unloadLocked.
 	stopping map[*Worktree]struct{}
+	// writers holds the one claim each worktree data directory may have, keyed
+	// by the directory: at most one session store writes a directory at a time.
+	// A claim is taken before the store is opened and given up only once the
+	// store is closed and nothing of its worktree can write any more — which is
+	// after the worktree left both worktrees and stopping, since Stop may give
+	// up waiting for a stream that still writes. What writes a directory with no
+	// store — a session deletion of a worktree that is gone, the pruning of its
+	// directory — holds a claim of its own for as long. Guarded by mu; see
+	// claimDataDir.
+	writers map[string]*dataDirWriter
 
 	// dataDirMu keeps pruning a deleted worktree's data directory from removing
 	// a directory a store is being opened under: openSessionStore holds it for
@@ -281,9 +300,12 @@ func (m *Manager) DeleteSession(ctx context.Context, worktree, sessionID string)
 //
 // A worktree that still exists is loaded and deleted through, because a session
 // there may have a live process to close, and its store owns the directory —
-// writing underneath it would be undone by its next write. One that is gone has
-// neither, so its index is rewritten on disk directly, and the directory itself
-// is then dropped if that was its last session.
+// writing underneath it would be undone by its next write. One that is gone is
+// deleted through its store too while that is still loaded: git can lose the
+// worktree before Pockode unloads it. Only once no store is left is its index
+// rewritten on disk directly, under the directory's claim (see writers) so that
+// none opens meanwhile, and the directory itself is then dropped if that was
+// its last session.
 func (m *Manager) sessionDeleter(name string) (func(context.Context, string) error, func(), error) {
 	wt, err := m.Get(name)
 	if err == nil {
@@ -303,6 +325,21 @@ func (m *Manager) sessionDeleter(name string) (func(context.Context, string) err
 	if dirErr != nil {
 		return nil, nil, dirErr
 	}
+	claim, live, claimErr := m.claimDataDir(name, dir)
+	if claimErr != nil {
+		return nil, nil, fmt.Errorf("delete a session of worktree %q: %w", name, claimErr)
+	}
+	if live != nil {
+		return live.DeleteSession, func() {
+			m.Release(live)
+		}, nil
+	}
+	// Nothing is built under this claim, so there is no load to wait for: a Get
+	// arriving meanwhile waits for the release instead.
+	m.mu.Lock()
+	claim.loadedLocked()
+	m.mu.Unlock()
+
 	// No store is open here to notify anyone, and the watchers stopped with the
 	// worktree. The work engine is still told: a chat here may have been
 	// watching a story that lives elsewhere and is still open.
@@ -320,6 +357,7 @@ func (m *Manager) sessionDeleter(name string) (func(context.Context, string) err
 			return err
 		}, func() {
 			m.pruneEmptySessionData(name, dir)
+			m.releaseDataDir(dir, claim)
 		}, nil
 }
 
@@ -351,6 +389,10 @@ func (d sessionDeletions) OnSessionChange(event session.SessionChangeEvent) {
 // beyond the sessions (agent session state, history) and may have a store open
 // on it. The main worktree's directory is the project's own and is never
 // touched.
+//
+// The caller holds dir's claim (see writers): a store still writing there
+// could add a session after the check, or recreate the index once the
+// directory is gone.
 func (m *Manager) pruneEmptySessionData(name, dir string) {
 	if name == "" {
 		return
@@ -701,41 +743,38 @@ func (m *Manager) Start() error {
 }
 
 // Get returns (or creates) the worktree for the given name and increments the reference count.
+//
+// Only one worktree is ever built per data directory at a time (see writers):
+// a caller that finds another one loading it waits for that load rather than
+// build a second store beside it, and one that finds the previous worktree of
+// the name still stopping waits for it to let go of the directory.
 func (m *Manager) Get(name string) (*Worktree, error) {
 	workDir, err := m.registry.Resolve(name)
 	if err != nil {
 		return nil, err
 	}
 
-	m.mu.Lock()
-	if existing, ok := m.worktrees[name]; ok {
-		existing.refCount++
-		slog.Debug("worktree ref incremented", "name", name, "refCount", existing.refCount)
-		m.mu.Unlock()
+	dir := m.dataDirFor(name)
+	claim, existing, err := m.claimDataDir(name, dir)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
 		return existing, nil
 	}
-	m.mu.Unlock()
 
-	// Create outside the lock to avoid blocking other goroutines
-	wt, err := m.create(name, workDir)
+	// Create outside the lock to avoid blocking other goroutines; the claim is
+	// what keeps them from creating it too.
+	wt, err := m.create(name, workDir, claim)
 	if err != nil {
+		m.mu.Lock()
+		claim.loadedLocked()
+		m.mu.Unlock()
 		return nil, err
 	}
 
 	m.mu.Lock()
-
-	// Another goroutine may have created it while we were creating
-	if existing, ok := m.worktrees[name]; ok {
-		existing.refCount++
-		slog.Debug("worktree ref incremented (race)", "name", name, "refCount", existing.refCount)
-		m.mu.Unlock()
-		// Discarded outside the lock for the same reason it was created outside
-		// it: Stop waits for the worktree's goroutines, and no other caller of
-		// this manager should have to queue behind that.
-		wt.Stop()
-		return existing, nil
-	}
-
+	claim.loadedLocked()
 	m.worktrees[name] = wt
 	wt.refCount = 1
 	// In the same critical section as the insertion, for the reason
@@ -747,6 +786,121 @@ func (m *Manager) Get(name string) (*Worktree, error) {
 	m.mu.Unlock()
 
 	return wt, nil
+}
+
+// dataDirWriter is the claim one writer — a worktree, or a write made with no
+// store — takes on a data directory: see Manager.writers.
+type dataDirWriter struct {
+	// loading is true from the claim until its worktree is in the loaded map,
+	// or failed to open. Guarded by Manager.mu.
+	loading bool
+	// loaded is closed when loading ends.
+	loaded chan struct{}
+	// released is closed when the claim is given up: nothing it covered can
+	// write to the directory any more.
+	released chan struct{}
+}
+
+func newDataDirWriter() *dataDirWriter {
+	return &dataDirWriter{loading: true, loaded: make(chan struct{}), released: make(chan struct{})}
+}
+
+// loadedLocked ends the claim's loading. Must be called with Manager.mu held.
+func (c *dataDirWriter) loadedLocked() {
+	c.loading = false
+	close(c.loaded)
+}
+
+// claimDataDir makes the caller the one writer of dir, or hands back the
+// worktree already loaded there with a reference taken. While another claim
+// holds the directory it waits: for a load in progress, until that worktree is
+// loaded (and then returns it) or failed; for any other holder — a worktree
+// stopping, a session deletion — until its claim is released, at most
+// writerReleaseTimeout.
+func (m *Manager) claimDataDir(name, dir string) (*dataDirWriter, *Worktree, error) {
+	// One bound for the whole wait, however many writers come and go in it.
+	var timeout <-chan time.Time
+	for {
+		m.mu.Lock()
+		if existing, ok := m.worktrees[name]; ok {
+			existing.refCount++
+			slog.Debug("worktree ref incremented", "name", name, "refCount", existing.refCount)
+			m.mu.Unlock()
+			return nil, existing, nil
+		}
+		held, busy := m.writers[dir]
+		if !busy {
+			claim := m.newClaimLocked(dir)
+			m.mu.Unlock()
+			return claim, nil, nil
+		}
+		loading := held.loading
+		m.mu.Unlock()
+
+		if loading {
+			<-held.loaded
+			continue
+		}
+		slog.Info("waiting for the previous writer to release a worktree's data directory", "name", name)
+		if timeout == nil {
+			timer := time.NewTimer(writerReleaseTimeout)
+			defer timer.Stop()
+			timeout = timer.C
+		}
+		select {
+		case <-held.released:
+		case <-timeout:
+			return nil, nil, fmt.Errorf("the data directory of worktree %q is still held by its previous writer after %s", name, writerReleaseTimeout)
+		}
+	}
+}
+
+// tryClaimDataDir makes the caller the one writer of dir if nothing holds it,
+// and otherwise returns nil without waiting. The claim has nothing to load.
+func (m *Manager) tryClaimDataDir(dir string) *dataDirWriter {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, busy := m.writers[dir]; busy {
+		return nil
+	}
+	claim := m.newClaimLocked(dir)
+	claim.loadedLocked()
+	return claim
+}
+
+// newClaimLocked records a new, loading claim on dir, which nothing holds.
+// Must be called with Manager.mu held.
+func (m *Manager) newClaimLocked(dir string) *dataDirWriter {
+	claim := newDataDirWriter()
+	if m.writers == nil {
+		m.writers = make(map[string]*dataDirWriter)
+	}
+	m.writers[dir] = claim
+	return claim
+}
+
+// releaseDataDirWhenStopped gives up claim once pm has stopped writing: at
+// once, ordinarily, since the caller has just shut it down; otherwise when the
+// stream it gave up waiting for ends. The caller has closed the store.
+func (m *Manager) releaseDataDirWhenStopped(dir string, claim *dataDirWriter, pm *process.Manager) {
+	select {
+	case <-pm.Stopped():
+		m.releaseDataDir(dir, claim)
+	default:
+		slog.Warn("a stopped worktree's processes are still writing; its data directory stays claimed until they end", "dir", dir)
+		go func() {
+			<-pm.Stopped()
+			m.releaseDataDir(dir, claim)
+		}()
+	}
+}
+
+// releaseDataDir gives up claim, which nothing writes under any more.
+func (m *Manager) releaseDataDir(dir string, claim *dataDirWriter) {
+	m.mu.Lock()
+	delete(m.writers, dir)
+	m.mu.Unlock()
+	close(claim.released)
 }
 
 // RefCount reports how many holders wt currently has. The counter is the only
@@ -806,7 +960,17 @@ func (m *Manager) ForceShutdown(name string) {
 	// The directory is kept for the sessions in it, so a worktree whose sessions
 	// were all deleted before it was has nothing to keep. Outside the branch
 	// above: a worktree nobody had open is just as likely to be the empty one.
-	m.pruneEmptySessionData(name, m.dataDirFor(name))
+	//
+	// Only when the directory has no writer. One that does is either a session
+	// deletion, which prunes on its way out, or this worktree's processes still
+	// draining past Stop — and the directory then waits for the next deletion.
+	dir := m.dataDirFor(name)
+	if claim := m.tryClaimDataDir(dir); claim != nil {
+		m.pruneEmptySessionData(name, dir)
+		m.releaseDataDir(dir, claim)
+	} else {
+		slog.Info("not pruning a deleted worktree's data directory while something still writes it", "worktree", name)
+	}
 }
 
 func (m *Manager) Shutdown() {
@@ -1025,11 +1189,14 @@ func (m *Manager) SessionSources() ([]SessionSource, error) {
 	return sources, nil
 }
 
-func (m *Manager) create(name, workDir string) (*Worktree, error) {
+// create builds the worktree whose data directory claim holds. On failure it
+// gives up the claim itself, once what it opened has stopped.
+func (m *Manager) create(name, workDir string, claim *dataDirWriter) (*Worktree, error) {
 	wtDataDir := m.dataDirFor(name)
 
 	sessionStore, err := m.openSessionStore(wtDataDir)
 	if err != nil {
+		m.releaseDataDir(wtDataDir, claim)
 		return nil, fmt.Errorf("create session store: %w", err)
 	}
 
@@ -1107,6 +1274,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		PermissionReviews:    permissionReviews,
 		watchers:             []watch.Watcher{fsWatcher, gitWatcher, gitDiffWatcher, sessionListWatcher, sessionDetailWatcher, chatMessagesWatcher},
 		subscribers:          make(map[watch.Notifier]struct{}),
+		writer:               claim,
 	}
 
 	processManager.SetOnProcessEnd(func() {
@@ -1114,6 +1282,15 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	})
 
 	if err := wt.Start(); err != nil {
+		// Start has stopped the watchers it started; the rest is what Stop does
+		// after them. The store is closed rather than abandoned: it holds the
+		// directory's claim, and an abandoned one would keep its flush timer.
+		permissionReviews.Close()
+		processManager.Shutdown()
+		if closeErr := sessionStore.Close(); closeErr != nil {
+			slog.Error("failed to write the session index of a worktree that failed to start", "worktree", name, "error", closeErr)
+		}
+		m.releaseDataDirWhenStopped(wtDataDir, claim, processManager)
 		return nil, fmt.Errorf("start worktree: %w", err)
 	}
 
@@ -1138,8 +1315,12 @@ func (m *Manager) openSessionStore(dir string) (*session.FileStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return session.NewFileStore(dir)
+	return newFileStore(dir)
 }
+
+// newFileStore is session.NewFileStore, replaced by tests that need to see when
+// a store is opened.
+var newFileStore = session.NewFileStore
 
 // maybeCleanup cleans up the worktree if it's idle and matches the given pointer.
 func (m *Manager) maybeCleanup(target *Worktree) {
@@ -1189,9 +1370,17 @@ func (m *Manager) unloadLocked(wt *Worktree) {
 // nothing under it is running — or once Stop gave up waiting on a CLI that
 // would not let go of its output (process.Manager.Shutdown's drain timeout),
 // which by then has been killed, so ReleaseProfile stops seeing it too.
+//
+// The data directory's claim outlives that last case: the stream Stop gave up
+// on still writes whatever the CLI leaves in its pipe, and a store opened
+// beside it would be overwritten. So it is released on the process manager's
+// own word, not on Stop's return.
 func (m *Manager) stopUnloaded(wt *Worktree) {
 	wt.Stop()
 	m.mu.Lock()
 	delete(m.stopping, wt)
 	m.mu.Unlock()
+	if wt.writer != nil {
+		m.releaseDataDirWhenStopped(wt.DataDir, wt.writer, wt.ProcessManager)
+	}
 }
