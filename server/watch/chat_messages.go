@@ -8,6 +8,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chatstream"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -22,24 +23,32 @@ import (
 type ChatMessagesWatcher struct {
 	*BaseWatcher
 	store session.Store
+	// projections keeps the projection of every session with a subscriber
+	// (projection.Live): a session somebody is looking at is one whose
+	// projection will be read.
+	projections projection.Holder
 
 	// sessionMu is held exclusively for the whole fan-out of one record, so
 	// every subscriber of a session queues records in the same order.
 	sessionMu    sync.RWMutex
 	sessionToSub map[string][]*chatSubscriber // sessionID -> subscribers
 	idToSub      map[string]*chatSubscriber   // subscription ID -> subscriber
+	// releases holds the projection hold of each session in sessionToSub.
+	releases map[string]func()
 }
 
 var _ chatstream.Sink = (*ChatMessagesWatcher)(nil)
 var _ Watcher = (*ChatMessagesWatcher)(nil)
 var _ ViewingChecker = (*ChatMessagesWatcher)(nil)
 
-func NewChatMessagesWatcher(store session.Store) *ChatMessagesWatcher {
+func NewChatMessagesWatcher(store session.Store, projections projection.Holder) *ChatMessagesWatcher {
 	return &ChatMessagesWatcher{
 		BaseWatcher:  NewBaseWatcher(),
 		store:        store,
+		projections:  projections,
 		sessionToSub: make(map[string][]*chatSubscriber),
 		idToSub:      make(map[string]*chatSubscriber),
+		releases:     make(map[string]func()),
 	}
 }
 
@@ -145,6 +154,9 @@ func (w *ChatMessagesWatcher) Subscribe(
 
 	sub := newChatSubscriber(id, sessionID, notifier)
 	w.sessionMu.Lock()
+	if len(w.sessionToSub[sessionID]) == 0 {
+		w.releases[sessionID] = w.projections.Hold(sessionID)
+	}
 	w.sessionToSub[sessionID] = append(w.sessionToSub[sessionID], sub)
 	w.idToSub[id] = sub
 	w.sessionMu.Unlock()
@@ -193,6 +205,8 @@ func (w *ChatMessagesWatcher) removeSessionMapping(id string) {
 	}
 	if len(w.sessionToSub[sub.sessionID]) == 0 {
 		delete(w.sessionToSub, sub.sessionID)
+		w.releases[sub.sessionID]()
+		delete(w.releases, sub.sessionID)
 	}
 }
 

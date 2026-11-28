@@ -19,6 +19,7 @@ import (
 	"github.com/pockode/server/internal/pathutil"
 	"github.com/pockode/server/permreview"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/watch"
@@ -1199,17 +1200,19 @@ func (m *Manager) create(name, workDir string, claim *dataDirWriter) (*Worktree,
 		m.releaseDataDir(wtDataDir, claim)
 		return nil, fmt.Errorf("create session store: %w", err)
 	}
+	// Before anything can append, so no write goes unreported.
+	projections := projection.Track(sessionStore)
 
 	fsWatcher := watch.NewFSWatcher(workDir)
 	gitWatcher := watch.NewGitWatcher(workDir)
 	gitDiffWatcher := watch.NewGitDiffWatcher(workDir)
 	sessionListWatcher := watch.NewSessionListWatcher(sessionStore, m.workStore)
 	sessionDetailWatcher := watch.NewSessionDetailWatcher(sessionStore, m.workStore)
-	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore)
+	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore, projections)
 	// The process manager's data dir is this worktree's own (wtDataDir), so agent
 	// session state lands next to the session store. MCP discovery still points at
 	// the main data dir (m.dataDir), the only place server.json is written.
-	processManager := process.NewManager(m.agents, name, workDir, wtDataDir, m.dataDir, sessionStore, m.leaseBudgets)
+	processManager := process.NewManager(m.agents, name, workDir, wtDataDir, m.dataDir, sessionStore, projections, m.leaseBudgets)
 	processManager.SetStreamSink(chatMessagesWatcher)
 	processManager.SetWorkLookup(m.workStore)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
@@ -1218,7 +1221,7 @@ func (m *Manager) create(name, workDir string, claim *dataDirWriter) (*Worktree,
 		sessionStore.AddOnChangeListener(sessionDeletions{engine: m.workEngine, worktree: name})
 	}
 
-	chatClient := chat.NewClient(sessionStore, processManager)
+	chatClient := chat.NewClient(sessionStore, projections, processManager)
 	if m.workEngine != nil {
 		// Every way a posted question stops waiting goes through the chat
 		// client, whichever caller asked for it, so this is where the engine
@@ -1256,6 +1259,7 @@ func (m *Manager) create(name, workDir string, claim *dataDirWriter) (*Worktree,
 		WorkDir:              workDir,
 		DataDir:              wtDataDir,
 		SessionStore:         sessionStore,
+		Projections:          projections,
 		FSWatcher:            fsWatcher,
 		GitWatcher:           gitWatcher,
 		GitDiffWatcher:       gitDiffWatcher,

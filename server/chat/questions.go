@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -557,8 +558,8 @@ func (c *Client) notPending(ctx context.Context, sessionID, requestID string) er
 
 // resolution is what the transcript says became of a question.
 type resolution struct {
-	// Kind is "answered", "declined", "withdrawn" or "" when nothing in the
-	// history names this request at all.
+	// Kind is "answered", "declined", "withdrawn" or "" when the history
+	// gives no account of this request.
 	Kind string
 	// By is who answered, as a sentence names them: the user, or the agent that
 	// answered for them. Read off the record (QuestionAnswer.ResolvedBy) rather
@@ -592,60 +593,41 @@ func describeResolution(r resolution) string {
 	}
 }
 
-// readResolutions walks the session's transcript for what became of each of
-// these requests.
+// readResolutions reads what became of each of these requests off the
+// session's projection.
 //
-// This is the one read of records that is allowed to be about a question's
-// fate, and it is not a second source of truth: whether a question is *still
-// open* has already been answered, by the turn state, and the only reason to be
-// here is that the answer was no. What became of it afterwards is a fact about
-// the past, which is exactly what a record is for.
+// It is not a second source of truth: whether a question is *still open* has
+// already been answered, by the turn state, and the only reason to be here is
+// that the answer was no. What became of it afterwards is what the records say,
+// which the projection is the one reading of. A question the projection holds
+// open — the live list kept an answer the records let go of (see
+// projection.State.Unanswered) — gets no account, as one the session never
+// asked does.
 //
-// A failure to read the history is not a failure to refuse: the caller is
+// A failure to read the projection is not a failure to refuse: the caller is
 // already refusing, and the worst this can cost is a vaguer sentence.
 func (c *Client) readResolutions(ctx context.Context, sessionID string, requestIDs []string) map[string]resolution {
 	out := make(map[string]resolution, len(requestIDs))
-	wanted := make(map[string]struct{}, len(requestIDs))
-	for _, id := range requestIDs {
-		wanted[id] = struct{}{}
-	}
-
-	records, err := c.store.GetHistory(ctx, sessionID)
+	state, err := c.projections.State(ctx, sessionID)
 	if err != nil {
 		slog.Warn("could not read history to explain a resolved question",
 			"sessionId", sessionID, "error", err)
 		return out
 	}
-
-	// Backwards: the newest account of a request is the one that holds.
-	for i := len(records) - 1; i >= 0 && len(wanted) > 0; i-- {
-		rec, err := agent.DecodeRecord(records[i])
-		if err != nil {
+	for _, id := range requestIDs {
+		q, ok := state.Posted(id)
+		if !ok {
 			continue
 		}
-		switch rec := rec.(type) {
-		case agent.MessageRecord:
-			for _, a := range rec.Answering {
-				if _, want := wanted[a.RequestID]; !want {
-					continue
-				}
-				kind := "answered"
-				if a.Declined {
-					kind = "declined"
-				}
-				out[a.RequestID] = resolution{Kind: kind, By: a.ResolvedBy.Describe(), At: a.AnsweredAt}
-				delete(wanted, a.RequestID)
+		switch q.Status {
+		case projection.QuestionAnswered, projection.QuestionDeclined:
+			out[id] = resolution{Kind: string(q.Status), By: q.Answer.ResolvedBy.Describe(), At: q.Answer.AnsweredAt}
+		case projection.QuestionWithdrawn:
+			res := resolution{Kind: "withdrawn", Reason: q.Reason}
+			if q.ResolvedAt != nil {
+				res.At = *q.ResolvedAt
 			}
-		case agent.RequestCancelledRecord:
-			if _, want := wanted[rec.RequestID]; !want {
-				continue
-			}
-			res := resolution{Kind: "withdrawn", Reason: rec.Reason}
-			if rec.ResolvedAt != nil {
-				res.At = *rec.ResolvedAt
-			}
-			out[rec.RequestID] = res
-			delete(wanted, rec.RequestID)
+			out[id] = res
 		}
 	}
 	return out

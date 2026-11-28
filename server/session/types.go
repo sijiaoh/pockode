@@ -194,7 +194,7 @@ type ForkSpec struct {
 	// which makes the fork a session that has run — see SessionMeta.Activated.
 	Activated bool
 	// Unanswered are the questions still open at the point the copy was cut,
-	// derived from the copied records themselves (agent.UnansweredQuestions).
+	// derived from the copied records themselves (projection.State.Unanswered).
 	// Their request ids are unchanged: the fork inherits the questions, it does
 	// not ask them again.
 	Unanswered []PendingQuestion

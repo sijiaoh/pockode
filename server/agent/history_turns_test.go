@@ -335,51 +335,71 @@ func TestInferHistoryTurns_ForkOfAnOldSession(t *testing.T) {
 	})
 }
 
-// v3History numbers lines as a version-3 file holds them, each "turn|record":
-// a turn id, "null" for none, or "-" for an untagged message.
-func v3History(lines ...string) []json.RawMessage {
-	records := make([]json.RawMessage, len(lines))
-	for i, line := range lines {
-		turn, rec, _ := strings.Cut(line, "|")
-		tag := `"turn":"` + turn + `",`
-		switch turn {
-		case "null":
-			tag = `"turn":null,`
-		case "-":
-			tag = ""
+// TestTurnInference_AnyPrefix: read one record at a time, a history infers as
+// InferHistoryTurns infers it whole — after every prefix, settled where it
+// stops, and after the rest is pushed onto the inference that prefix left.
+// The cuts that matter are the ones through a run of messages, which are held
+// on the record after them: before an old line, before a new one, and with no
+// record after them at all.
+func TestTurnInference_AnyPrefix(t *testing.T) {
+	histories := map[string][]json.RawMessage{
+		"old into new and back": {
+			json.RawMessage(`{"type":"message","content":"hi","message_id":"m1"}`),
+			json.RawMessage(`{"type":"text","content":"hello"}`),
+			json.RawMessage(`{"seq":3,"v":3,"turn":null,"type":"process_ended"}`),
+			json.RawMessage(`{"seq":4,"v":3,"type":"message","content":"more","message_id":"m2"}`),
+			json.RawMessage(`{"type":"warning","message":"Skipped 1 history entry","seq":0}`),
+			json.RawMessage(`{"seq":5,"v":3,"type":"message","content":"and more","message_id":"m3"}`),
+			json.RawMessage(`{"seq":6,"v":3,"turn":"T","type":"turn_started","turn_id":"T","origin":"prompt","message_id":"m2"}`),
+			json.RawMessage(`{"seq":7,"v":3,"turn":"T","type":"done"}`),
+			json.RawMessage(`{"seq":8,"v":2,"type":"message","content":"old again","message_id":"m4"}`),
+			json.RawMessage(`{"seq":9,"v":2,"type":"message","content":"twice","message_id":"m5"}`),
+			json.RawMessage(`{"seq":10,"v":2,"type":"text","content":"ok"}`),
+			json.RawMessage(`{"seq":11,"v":2,"type":"message","content":"last","message_id":"m6"}`),
+		},
+		"old Codex": legacyHistory(
+			`{"type":"message","content":"go","message_id":"m1"}`,
+			`{"type":"permission_request","request_id":"r1","tool_use_id":"t1"}`,
+			`{"type":"process_ended"}`,
+			`{"type":"request_cancelled","request_id":"r1","reason":"process_ended"}`,
+			`{"type":"text","content":"late"}`,
+			`{"type":"message","content":"again","message_id":"m2"}`,
+		),
+	}
+	raws := func(lines []InferredLine) []string {
+		out := make([]string, len(lines))
+		for i, line := range lines {
+			out[i] = string(line.Raw)
 		}
-		records[i] = json.RawMessage(fmt.Sprintf(`{"seq":%d,"v":3,%s%s`, i+1, tag, strings.TrimPrefix(rec, "{")))
+		return out
 	}
-	return records
-}
-
-func TestOpenTurnOf(t *testing.T) {
-	opened := []string{
-		`-|{"type":"message","message_id":"m1"}`,
-		`T1|{"type":"turn_started","turn_id":"T1","origin":"prompt","message_id":"m1"}`,
-		`T1|{"type":"text","content":"working"}`,
+	want := func(records []json.RawMessage, agentType session.AgentType) []string {
+		var out []string
+		for _, raw := range InferHistoryTurns(records, agentType) {
+			out = append(out, string(raw))
+		}
+		return out
 	}
-	tests := []struct {
-		name  string
-		lines []string
-		want  string
-	}{
-		{"no turn ever", []string{`-|{"type":"message","message_id":"m1"}`}, ""},
-		{"a turn the cut went through", opened, "T1"},
-		{"a turn its agent ended", append(slices.Clone(opened), `T1|{"type":"interrupted"}`), ""},
-		{"a turn its process stopped carrying", append(slices.Clone(opened), `null|{"type":"process_ended"}`), ""},
-		{"an ending in no turn ends nothing", append(slices.Clone(opened), `null|{"type":"done"}`), "T1"},
-		{"a straggler of the turn before", append(slices.Clone(opened),
-			`T1|{"type":"done"}`,
-			`T2|{"type":"turn_started","turn_id":"T2","origin":"output"}`,
-			`T1|{"type":"tool_result","tool_use_id":"x"}`,
-			`T1|{"type":"error","error":"late"}`), "T2"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := OpenTurnOf(v3History(tc.lines...)); got != tc.want {
-				t.Errorf("OpenTurnOf = %q, want %q", got, tc.want)
+	for name, records := range histories {
+		for _, agentType := range []session.AgentType{session.AgentTypeClaude, session.AgentTypeCodex} {
+			for cut := 0; cut <= len(records); cut++ {
+				inference := NewTurnInference(agentType)
+				var lines []InferredLine
+				for _, raw := range records[:cut] {
+					lines = inference.Push(lines, raw)
+				}
+				if got := raws(inference.Settle(slices.Clone(lines))); !slices.Equal(got, want(records[:cut], agentType)) {
+					t.Errorf("%s (%s), cut at %d:\n  %s\nwant:\n  %s", name, agentType, cut,
+						strings.Join(got, "\n  "), strings.Join(want(records[:cut], agentType), "\n  "))
+				}
+				for _, raw := range records[cut:] {
+					lines = inference.Push(lines, raw)
+				}
+				if got := raws(inference.Settle(lines)); !slices.Equal(got, want(records, agentType)) {
+					t.Errorf("%s (%s), rest pushed after a cut at %d:\n  %s\nwant:\n  %s", name, agentType, cut,
+						strings.Join(got, "\n  "), strings.Join(want(records, agentType), "\n  "))
+				}
 			}
-		})
+		}
 	}
 }

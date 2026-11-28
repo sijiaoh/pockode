@@ -8,6 +8,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/htmlpage"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -17,7 +18,7 @@ import (
 func TestProcess_PageToolResultIsRecordedWithItsPage(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))

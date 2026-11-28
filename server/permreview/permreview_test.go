@@ -13,6 +13,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -198,10 +199,10 @@ func newFixtureOn(t *testing.T, agentType session.AgentType, mode session.Mode) 
 	registry := agent.NewRegistry()
 	registry.Register(session.AgentTypeClaude, ag)
 	registry.Register(session.AgentTypeCodex, ag)
-	pm := process.NewManager(registry, "", "/work/tree", t.TempDir(), "", store, session.LeaseBudgets{Idle: time.Minute})
+	pm := process.NewManager(registry, "", "/work/tree", t.TempDir(), "", store, projection.FromReader(store), session.LeaseBudgets{Idle: time.Minute})
 	t.Cleanup(pm.Shutdown)
 
-	f := &fixture{store: store, pm: pm, chat: chat.NewClient(store, pm), agent: ag}
+	f := &fixture{store: store, pm: pm, chat: chat.NewClient(store, projection.FromReader(store), pm), agent: ag}
 	f.engine = session.Engine{Model: "haiku", Effort: "low"}
 	f.service = New(Config{
 		Store:     flakyStore{Store: store, f: f},

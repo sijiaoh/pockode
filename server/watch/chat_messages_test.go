@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -80,12 +81,22 @@ func endsWith(method string) func([]Notification) bool {
 
 func newStartedChatWatcher(t *testing.T) *ChatMessagesWatcher {
 	t.Helper()
+	return newStartedChatWatcherHolding(t, nil)
+}
+
+// newStartedChatWatcherHolding is newStartedChatWatcher with the projection
+// holds going to holder, or to a Source that keeps nothing when it is nil.
+func newStartedChatWatcherHolding(t *testing.T, holder projection.Holder) *ChatMessagesWatcher {
+	t.Helper()
 	store, err := session.NewFileStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	w := NewChatMessagesWatcher(store)
+	if holder == nil {
+		holder = projection.FromReader(store)
+	}
+	w := NewChatMessagesWatcher(store, holder)
 	if err := w.Start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -210,5 +221,53 @@ func TestChatResync_IsNoWireType(t *testing.T) {
 		if "chat."+string(w.Type()) == ChatResyncMethod {
 			t.Errorf("%T is notified as %s", w, ChatResyncMethod)
 		}
+	}
+}
+
+// countingHolder counts the projection holds outstanding per session.
+type countingHolder struct {
+	heldMu sync.Mutex
+	held   map[string]int
+}
+
+func (h *countingHolder) Hold(sessionID string) func() {
+	h.heldMu.Lock()
+	defer h.heldMu.Unlock()
+	h.held[sessionID]++
+	return func() {
+		h.heldMu.Lock()
+		defer h.heldMu.Unlock()
+		h.held[sessionID]--
+	}
+}
+
+func (h *countingHolder) count(sessionID string) int {
+	h.heldMu.Lock()
+	defer h.heldMu.Unlock()
+	return h.held[sessionID]
+}
+
+// A session is held from its first subscriber until its last one leaves, once
+// however many subscribe, and again when somebody subscribes after that.
+func TestChatMessagesWatcher_HoldsTheProjectionWhileSubscribed(t *testing.T) {
+	holder := &countingHolder{held: make(map[string]int)}
+	w := newStartedChatWatcherHolding(t, holder)
+
+	subscribeChat(t, w, "a", newGatedNotifier(true))
+	subscribeChat(t, w, "b", newGatedNotifier(true))
+	if got := holder.count("sess"); got != 1 {
+		t.Fatalf("two subscribers: %d holds, want 1", got)
+	}
+	w.Unsubscribe("a")
+	if got := holder.count("sess"); got != 1 {
+		t.Fatalf("one subscriber left: %d holds, want 1", got)
+	}
+	w.Unsubscribe("b")
+	if got := holder.count("sess"); got != 0 {
+		t.Fatalf("no subscriber left: %d holds, want 0", got)
+	}
+	subscribeChat(t, w, "c", newGatedNotifier(true))
+	if got := holder.count("sess"); got != 1 {
+		t.Fatalf("subscribed again: %d holds, want 1", got)
 	}
 }

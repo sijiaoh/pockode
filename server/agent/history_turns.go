@@ -49,102 +49,187 @@ import (
 // lines starts with no turn open, because every boundary between versions is a
 // server restart, after which nothing is open.
 func InferHistoryTurns(records []json.RawMessage, agentType session.AgentType) []json.RawMessage {
-	legacy := legacyLines(records)
-	if legacy == nil {
+	inference := NewTurnInference(agentType)
+	var lines []InferredLine
+	for _, raw := range records {
+		lines = inference.Push(lines, raw)
+	}
+	lines = inference.finish(lines)
+	if !inference.inferred {
 		return records
 	}
-
-	seqs := session.HistorySeqs(records)
-	out := make([]json.RawMessage, 0, len(records))
-	var replay *turnReplay
-	for i, raw := range records {
-		if !legacy[i] {
-			// A line written with turns ends the stretch; the warning a
-			// damaged file gets, in no file, ends nothing.
-			if session.HistoryTurnOf(raw).Tagged() {
-				replay = nil
-			}
-			out = append(out, raw)
-			continue
-		}
-		if replay == nil {
-			replay = &turnReplay{straggles: agentType == session.AgentTypeCodex, expired: map[string]session.HistoryTurn{}}
-		}
-		out = replay.step(out, raw, seqs[i])
+	out := make([]json.RawMessage, len(lines))
+	for i, line := range lines {
+		out[i] = line.Raw
 	}
 	return out
 }
 
-// legacyLines says which records need their turn inferred, nil when none do.
-//
-// A record that is not a message is old exactly when it is untagged: from
-// version 3 on, every one is written with a turn or with none. A message is
-// untagged in every version, so it goes with the records around it — the
-// next one, which is what it was written ahead of, or for a message nothing
-// followed, the one before. A record carrying no seq (the warning a damaged
-// file gets) is in no file and goes with neither.
-func legacyLines(records []json.RawMessage) []bool {
-	type kind int
-	const (
-		notInFile kind = iota
-		message
-		tagged
-		old
-	)
-	kinds := make([]kind, len(records))
-	for i, raw := range records {
-		switch {
-		case session.HistoryTurnOf(raw).Tagged():
-			kinds[i] = tagged
-		case isNotInFile(raw):
-			kinds[i] = notInFile
-		case recordType(raw) == EventTypeMessage:
-			kinds[i] = message
-		default:
-			kinds[i] = old
-		}
-	}
-
-	// What follows each message, read back to front.
-	following := make([]kind, len(records))
-	next := notInFile
-	for i := len(records) - 1; i >= 0; i-- {
-		if kinds[i] == tagged || kinds[i] == old {
-			next = kinds[i]
-		}
-		following[i] = next
-	}
-
-	legacy := make([]bool, len(records))
-	found := false
-	prev := notInFile
-	for i, k := range kinds {
-		switch k {
-		case tagged, old:
-			prev = k
-		case message:
-			k = following[i]
-			if k == notInFile {
-				k = prev
-			}
-			if k == notInFile {
-				// Nothing but messages: nothing written since turns had ids
-				// says otherwise.
-				k = old
-			}
-		}
-		legacy[i] = k == old
-		found = found || legacy[i]
-	}
-	if !found {
-		return nil
-	}
-	return legacy
+// InferredLine is one line of a history as InferHistoryTurns returns it, with
+// what it worked out about the line alongside.
+type InferredLine struct {
+	// Raw is the line: as stored, or for a line written before turns had ids,
+	// tagged as one written today would be. A synthesized turn_started is a
+	// line of its own.
+	Raw json.RawMessage
+	// Seq is the seq HistorySeqs gives the line; NoHistorySeq for one in no
+	// file.
+	Seq session.HistorySeq
+	// Turn is the turn the line belongs to, as Raw's envelope says it.
+	Turn session.HistoryTurn
 }
 
-func isNotInFile(raw json.RawMessage) bool {
-	seqs := session.HistorySeqs([]json.RawMessage{raw})
-	return !seqs[0].Valid()
+// TurnInference is InferHistoryTurns read one record at a time, for a reader
+// handed a history as it grows: pushing a history's records one after another
+// and then settling yields exactly what InferHistoryTurns returns for all of
+// them, and so does settling after any prefix and pushing the rest into the
+// inference as it was before settling.
+//
+// A message is the one record that cannot be read on arrival: which version
+// wrote it is read off the record after it (kindOf), so it is held until
+// that record arrives, with any line in no file behind it so that the order
+// stays the file's. Settle says what the held lines are if the history ends
+// where it does now.
+type TurnInference struct {
+	straggles bool
+	replay    *turnReplay
+	// prevSeq is the seq of the newest numbered record pushed.
+	prevSeq session.HistorySeq
+	// prev is the kind of the newest record that was not a message and was in
+	// the file; kindNotInFile before there was one.
+	prev lineKind
+	held []heldLine
+	// inferred says some line was read as old.
+	inferred bool
+}
+
+type lineKind int
+
+const (
+	kindNotInFile lineKind = iota
+	kindMessage
+	kindTagged
+	kindOld
+)
+
+type heldLine struct {
+	raw  json.RawMessage
+	seq  session.HistorySeq
+	kind lineKind
+}
+
+// NewTurnInference starts the inference of a history written by an agent of
+// agentType.
+func NewTurnInference(agentType session.AgentType) *TurnInference {
+	return &TurnInference{straggles: agentType == session.AgentTypeCodex}
+}
+
+// Push reads the next record of the history and appends to out the lines that
+// are now settled — none, while the record is a message waiting on what comes
+// after it.
+func (t *TurnInference) Push(out []InferredLine, raw json.RawMessage) []InferredLine {
+	seq := session.NextHistorySeq(t.prevSeq, raw)
+	if seq.Valid() {
+		t.prevSeq = seq
+	}
+	kind := kindOf(raw, seq)
+	switch kind {
+	case kindMessage, kindNotInFile:
+		if kind == kindNotInFile && len(t.held) == 0 {
+			return append(out, InferredLine{Raw: raw, Seq: seq, Turn: session.HistoryTurnOf(raw)})
+		}
+		t.held = append(t.held, heldLine{raw: raw, seq: seq, kind: kind})
+		return out
+	}
+	// A message goes with the record it was written ahead of.
+	out = t.release(out, kind)
+	t.prev = kind
+	return t.step(out, raw, seq, kind)
+}
+
+// Settle appends the lines still held as they read if nothing follows them. The
+// inference itself is left as it was, so the history can still be pushed onto.
+func (t *TurnInference) Settle(out []InferredLine) []InferredLine {
+	if len(t.held) == 0 {
+		return out
+	}
+	return t.clone().finish(out)
+}
+
+// finish is Settle for a history that has ended: a message nothing followed
+// goes with the record before it, or with none at all — nothing but messages —
+// as old.
+func (t *TurnInference) finish(out []InferredLine) []InferredLine {
+	kind := t.prev
+	if kind == kindNotInFile {
+		kind = kindOld
+	}
+	return t.release(out, kind)
+}
+
+// release reads the held lines as written by the version kind says.
+func (t *TurnInference) release(out []InferredLine, kind lineKind) []InferredLine {
+	for _, h := range t.held {
+		k := kind
+		if h.kind == kindNotInFile {
+			k = kindNotInFile
+		}
+		out = t.step(out, h.raw, h.seq, k)
+	}
+	t.held = nil
+	return out
+}
+
+func (t *TurnInference) step(out []InferredLine, raw json.RawMessage, seq session.HistorySeq, kind lineKind) []InferredLine {
+	if kind != kindOld {
+		// A line written with turns ends the stretch; the warning a damaged
+		// file gets, in no file, ends nothing.
+		turn := session.HistoryTurnOf(raw)
+		if turn.Tagged() {
+			t.replay = nil
+		}
+		return append(out, InferredLine{Raw: raw, Seq: seq, Turn: turn})
+	}
+	t.inferred = true
+	if t.replay == nil {
+		t.replay = &turnReplay{straggles: t.straggles, expired: map[string]session.HistoryTurn{}}
+	}
+	return t.replay.step(out, raw, seq)
+}
+
+// clone is a copy of t that pushing into leaves t as it was.
+func (t *TurnInference) clone() *TurnInference {
+	c := *t
+	c.held = append([]heldLine(nil), t.held...)
+	if t.replay != nil {
+		replay := *t.replay
+		replay.expired = make(map[string]session.HistoryTurn, len(t.replay.expired))
+		for id, turn := range t.replay.expired {
+			replay.expired[id] = turn
+		}
+		c.replay = &replay
+	}
+	return &c
+}
+
+// kindOf is what a record says about the version that wrote it. A record that
+// is not a message is old exactly when it is untagged: from version 3 on, every
+// one is written with a turn or with none. A message is untagged in every
+// version, so it goes with the records around it — the next one, which is what
+// it was written ahead of, or for a message nothing followed, the one before. A
+// record carrying no seq (the warning a damaged file gets) is in no file and
+// goes with neither.
+func kindOf(raw json.RawMessage, seq session.HistorySeq) lineKind {
+	switch {
+	case session.HistoryTurnOf(raw).Tagged():
+		return kindTagged
+	case !seq.Valid():
+		return kindNotInFile
+	case recordType(raw) == EventTypeMessage:
+		return kindMessage
+	default:
+		return kindOld
+	}
 }
 
 func recordType(raw json.RawMessage) EventType {
@@ -167,7 +252,7 @@ type turnReplay struct {
 	expired map[string]session.HistoryTurn
 }
 
-func (r *turnReplay) step(out []json.RawMessage, raw json.RawMessage, seq session.HistorySeq) []json.RawMessage {
+func (r *turnReplay) step(out []InferredLine, raw json.RawMessage, seq session.HistorySeq) []InferredLine {
 	rec, err := DecodeRecord(raw)
 	if err != nil {
 		// A type this build has no name for moves no turn; like any such
@@ -180,7 +265,7 @@ func (r *turnReplay) step(out []json.RawMessage, raw json.RawMessage, seq sessio
 	case MessageRecord:
 		// Written before the prompt is reduced, and never tagged: the
 		// turn_started after it says whether it opened its turn.
-		out = append(out, raw)
+		out = append(out, InferredLine{Raw: raw, Seq: seq})
 		in = session.TurnInput{Signal: session.SignalPrompt, MessageID: rec.MessageID}
 		transition := r.reduce(in, seq)
 		if transition.Started {
@@ -249,7 +334,7 @@ func (r *turnReplay) reduce(in session.TurnInput, seq session.HistorySeq) sessio
 
 // turnStarted is the record chatstream.Sequencer.Advance writes for a turn in
 // opened.
-func (r *turnReplay) turnStarted(in session.TurnInput, transition session.TurnTransition, opener json.RawMessage) json.RawMessage {
+func (r *turnReplay) turnStarted(in session.TurnInput, transition session.TurnTransition, opener json.RawMessage) InferredLine {
 	started := TurnStartedRecord{
 		TurnID:     transition.Turn,
 		Origin:     TurnOriginOutput,
@@ -273,12 +358,12 @@ func (r *turnReplay) openTurn() session.HistoryTurn {
 // tagged is raw as a line of the current version under seq and turn. A line
 // that cannot hold an envelope — not a JSON object, which nothing can read as
 // a record either — is returned as it is.
-func tagged(raw json.RawMessage, seq session.HistorySeq, turn session.HistoryTurn) json.RawMessage {
+func tagged(raw json.RawMessage, seq session.HistorySeq, turn session.HistoryTurn) InferredLine {
 	line, err := session.TaggedHistoryRecord(raw, seq, turn)
 	if err != nil {
-		return raw
+		return InferredLine{Raw: raw, Seq: seq}
 	}
-	return line
+	return InferredLine{Raw: line, Seq: seq, Turn: turn}
 }
 
 // observedAt is the moment a record carries, if it carries one.
@@ -288,38 +373,4 @@ func observedAt(raw json.RawMessage) *time.Time {
 	}
 	_ = json.Unmarshal(raw, &head)
 	return head.ObservedAt
-}
-
-// OpenTurnOf is the turn a history leaves open — the one its last record was
-// written in, with no ending after it — or "" when it leaves none. records is
-// a history in the shape InferHistoryTurns returns, so it is read off the
-// recorded turns: the last turn_started names the turn, and what can end it
-// is a record tagged with it whose signal ends a turn, or a process_ended,
-// which belongs to no turn and ends whichever was open.
-//
-// Read where a history stops being one process's: a fork's copy, cut while
-// the source's turn ran (chat.Client.Fork).
-func OpenTurnOf(records []json.RawMessage) string {
-	open := ""
-	for _, raw := range records {
-		rec, err := DecodeRecord(raw)
-		if err != nil {
-			continue
-		}
-		if started, ok := rec.(TurnStartedRecord); ok {
-			open = started.TurnID
-			continue
-		}
-		if open == "" {
-			continue
-		}
-		in, ok := TurnInputOf(rec)
-		if !ok || !in.Signal.EndsTurn() {
-			continue
-		}
-		if in.Signal == session.SignalProcessEnded || session.HistoryTurnOf(raw).ID() == open {
-			open = ""
-		}
-	}
-	return open
 }

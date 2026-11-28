@@ -609,8 +609,9 @@ agent reads this transcript too, and one claiming the turn finished where it was
 cut would lie to it as well as to the user. What the copy does get is the truth
 about the fork itself — no process of its own is carrying that turn — so
 `chat.Client.Fork` appends `process_ended`, in no turn, when the copy leaves a
-turn open (`agent.OpenTurnOf`, which reads old sources through the inference in
-[Turn Identity](#turn-identity)). The cut reply reads "Process ended", and the
+turn open (`projection.State.OpenTurn` of the copy's own fold, which reads old
+sources through the inference in [Turn Identity](#turn-identity)). The cut
+reply reads "Process ended", and the
 history agrees with the fork's idle turn state; it is the same record restart
 repair would write at the next start anyway ([Restart Repair](#restart-repair)).
 A cut between turns gets nothing.
@@ -1862,8 +1863,10 @@ news is
 ### Finding a question by id alone
 
 `worktree.Manager.LocateQuestions` answers "which sessions is this request
-waiting in", across every worktree. It is backed by an index that is a **projection**,
-never a second source of truth: it is a session-change listener, so it is
+waiting in", across every worktree. It is backed by an index that is a
+**projection** — of the sessions' `TurnState.Unanswered` lists, not of history
+([The History Projection](#the-history-projection) is that one) — never a
+second source of truth: it is a session-change listener, so it is
 rebuilt from the list a change already carries rather than patched by an add and
 a remove somebody could forget. At startup it is filled from each worktree's
 on-disk session index — unlike a blocker, a posted question does not expire
@@ -1883,8 +1886,8 @@ refuses and lists them.
 
 ### A fork inherits what was open at the cut
 
-A fork is the one place a question's state is derived from records
-(`agent.UnansweredQuestions`), and it has to be: what crosses is what was
+A fork reads its questions' state off the fold of the copied records alone
+(`projection.State.Unanswered`), and it has to be: what crosses is what was
 unanswered **at the cut**, which is not the same set as what is unanswered in the
 source now — the source has gone on answering since. The request ids are
 unchanged, so answering an inherited question names the same question the card in
@@ -2661,7 +2664,7 @@ are settled by the same list:
   `SendAnswers`), and only the one that took it off the list holds it; a discard
   of the other changes nothing.
 
-A fork reads the same thing off the copied records (`agent.UnansweredQuestions`):
+A fork reads the same thing off the copied records (`projection.State.Unanswered`):
 a `message_discarded` reopens what the named message answered. It differs from
 the live list in one place, deliberately: a step advancing between the answer
 and the discard writes nothing, so a fork cut after the discard has the question
@@ -5149,7 +5152,8 @@ goes there, what only gets described, and what a fork does with it are in
   the ceiling made reading an 8 KiB history cost the whole ceiling — measured at
   20ms and 8.4 MB, against 1ms and 91 KB — on a path the user waits on, since
   `GetHistory` runs when a session is opened and again for every page scrolled
-  back.
+  back — each time over the whole file
+  ([why](#the-history-projection)).
 
 The session index (`sessions/index.json`) is a whole-file rewrite instead, with
 durability rules and a concurrency model of its own — see
@@ -5353,11 +5357,11 @@ endings.
   says the same of the turn the cut went through. Readers therefore never treat
   a new `turn_started` as closing an open turn: a `turn_started` with a turn
   still open is a write-path bug, not a shape to read around.
-  `agent.OpenTurnOf` reads the turn a history leaves open off these records,
-  and `session.TurnSignal.EndsTurn` is which signals end one, held to
+  `projection.State.OpenTurn` reads the turn a history leaves open off these
+  records, and `session.TurnSignal.EndsTurn` is which signals end one, held to
   `ReduceTurn` by a test.
 - **Server readers of turns read the ids.** The fork's mid-turn cut is the one
-  that used to find turns from the endings, and now asks `agent.OpenTurnOf`
+  that used to find turns from the endings, and now asks the projection
   ([Session Forking](#session-forking)). The rest stay on the turn state,
   because their question is not about records: `ReduceTurn` is what produces
   the ids, restart repair asks whether the *process* was closed out (a turn
@@ -5389,7 +5393,12 @@ endings.
   is in no file and carries seq 0, which gives it no number. A line is old when
   it is untagged and not a message; a message goes with the records around it.
   So a fork's copy of an old session, which `WriteHistory` re-envelopes
-  without tags, still reads as old.
+  without tags, still reads as old. `agent.TurnInference` is the same
+  inference one record at a time, for a reader handed a history as it grows
+  (the projection below); `InferHistoryTurns` is it run over a whole history.
+  A message is held until the record after it arrives, since that is what
+  says which version wrote it, and `Settle` reads what is held as if nothing
+  followed.
 
 The tag is a fact about the record's position, and what makes it one is the
 per-session lock of `chatstream.Sequencer`: every input that can open or end a
@@ -5400,6 +5409,181 @@ its ending — or, for a straggler, after that ending. The question signals
 reduce through the store directly; they never open or end a turn. A reduction the store applied but failed to write to the
 index is carried out all the same — the store holds that state and retries the
 write — so a turn it opened still gets its `turn_started`.
+
+### The History Projection
+
+A record says what was true at one moment; what is true *now* of the things
+records talk about — which turns ran and how they ended, where each tool run
+stands, what became of each question, the current plan, which messages a Stop
+discarded and where the agent read the others — is state, and `projection` is
+the one place it is derived from records. Before it, each reader replayed the
+records its own way; the server's read-backs now read it instead — the fork's
+unanswered questions and open turn (a fold of the copy alone), the plan seed a
+resumed process starts its Task fold from, and what became of a question a
+refused answer names. The web reducer is still a replay of its own.
+
+**What still reads the file whole, and why.** Every chat page and every
+subscription's first page — `chat.messages.history`, `session_view.history`,
+`ChatMessagesWatcher.Subscribe` — reads the whole of `history.jsonl` through
+`GetHistory` on each request and cuts its page out of that. The wire sends the
+raw records themselves, and the projection holds state, not records, so it has
+nothing to page. Serving those pages without the file would mean keeping the
+records beside the projection, which would hold every active session's
+history twice over in memory, or a seq-to-offset index, which would have to repeat
+`ReadJSONL`'s rules for damaged lines. Neither is worth building while the wire
+still carries records: this stays as it is until the wire carries the
+projection's items instead and is served from them. A fork reads the file too,
+but for a different reason: it copies the records it cuts, so it needs them.
+`FileStore` counting a session's seqs on its first append is the store's own
+bookkeeping, not a read-back of state.
+
+- **A pure fold.** `projection.Fold(records, agentType)` folds a history,
+  `Append` folds what is written after it, and `State` is what the records say
+  so far. Folding a prefix and appending the rest is folding everything at
+  once, and a `State` shares nothing the fold goes on changing — which is what
+  lets a fork read the questions open at its cut off the prefix alone.
+  `TestFold_AnyPrefix` holds both against every cut of a history that mixes old
+  lines and new. In memory only; nothing is persisted.
+- **Turns are read, not decided.** A `turn_started` opens one and an ending
+  tagged with it (or a `process_ended`) closes it, as
+  [Turn Identity](#turn-identity) has every turn written. Lines from before
+  turn ids go through `agent.TurnInference` first, so they carry the turns
+  `ReduceTurn` would have given them. `ReduceTurn` stays the authority for the
+  live turn: `session.TurnState` is what the reducer holds now, and the
+  projection is what the records say. They part where something moves without
+  a record — held answers let go when a step advances (below), and a call's
+  in-flight `tool_activity`, which is broadcast and never stored — so a reader
+  of the live turn keeps reading `TurnState`, and the client still settles its
+  rows against the live turn itself.
+- **Questions follow the live list's rules, as far as records show them.** The
+  unanswered list keeps `TurnState.Unanswered`'s order (a reopened question goes
+  to the end), and an answer can be taken back by a discard only while its turn
+  runs and its question was not withdrawn — `TurnState.Delivered`'s lifetime. A
+  step advancing or a work closing lets go of the held answers without a
+  record, so there the projection reopens what the live list keeps answered:
+  the fork's deliberate difference, described in
+  [A Discarded Answer Reopens Its Question](#a-discarded-answer-reopens-its-question).
+  A posted question's newest record holds; the CLI's own legacy question was
+  never reopened, so whatever settled it first holds.
+- **Legacy shapes are read once, where records enter.** `normalize` turns each
+  record into facts in today's shape, and nothing past it knows an old shape
+  existed: origin `work` is `system` (carried on the message for the readers
+  of messages still to come; no `State` field exposes messages yet); an
+  `ask_user_question` is one legacy question per entry under its request id,
+  answered by a `question_response`'s flat map (labels joined by `", "`, free text behind `"Other: "`, a null map
+  being the CLI's cancellation) and never on the unanswered list, since nothing
+  can answer one any more; and the warning a Stop wrote before
+  `message_discarded` existed is a discard that names no message, with the
+  excerpt it quoted. A Codex patch's input (an `Edit`, the one tool the
+  client reads either shape for) is read into one shape of its `changes` — the
+  app-server channel's array of `{path, kind, diff}` — from the MCP channel's
+  map of path to change that older records hold, on the call and on its
+  permission request alike. Only that value is rewritten, every other byte of
+  the input staying as recorded, and a map it cannot read is left whole, as the
+  client's renderer leaves it.
+- **One item per tool run.** Everything the records say about one call — its
+  `tool_call` (and resends), the `permission_request` held on it and the
+  answer, its result or results, the plan filed on it — is one `Item`, keyed by
+  `tool_use_id`, whichever record arrives first: Claude announces a call before
+  asking, Codex asks first, and a Claude subagent's request can precede its
+  own call. The rules are the web reducer's, with what only its screen needs
+  (cards taking a row's place, bubbles) left behind:
+  - an allowed call runs from its answer; a denied one is `denied` until the
+    engine reports the refusal, and a result recorded before the answer is
+    what stands. A call asked about again — its first request expired or
+    denied before anything ran — waits on the new request. A person's answer
+    moves only a pending request; one naming who gave it (`by`) is the answer
+    the server took and stands over a person's. An expired request keeps the
+    first reason a record gives; a request naming no call is an item of its
+    own.
+  - a `background_started` parks the run in the background past its turn,
+    the placeholder kept beside the outcome that later replaces it; a result
+    reaching an interrupted run leaves it interrupted and says whether it
+    finished after the Stop.
+  - a turn ending other than completed interrupts every call still running,
+    and one trailing in after it — the main agent's, or a subagent's whose
+    subagent was still running; a finished subagent can be resumed, so its
+    trailing work is still to report. Backgrounded work and what runs under it
+    live on until `process_ended`, which also expires every pending request.
+  - a subagent's calls are its item's `Children` (`parent_tool_use_id`, at any
+    depth), including one recorded before its parent was, which the parent
+    adopts; a parent the call is itself an ancestor of is ignored. Its
+    settling settles what still runs under it, and a call trailing
+    in after it was cut short is born interrupted — unless a turn has begun
+    since, which resumed it. A `resumed` call is its run running again — not
+    one still held on its request; one the history never saw made is not
+    started.
+
+  Not items: fetches (`origin_tool_use_id`) stay items of their own that name
+  their origin, rather than being absorbed into it as the client draws them;
+  a Codex plan with no call (`plan_id`) is the session's plan, not a run; and
+  the CLI's legacy `ask_user_question` is a question, not its tool row.
+- **Turn ids are per session.** A fork's copy keeps its source's ids, so a
+  projection is one session's and nothing is keyed across sessions.
+- **Held live beside the store that writes it, for active sessions only.**
+  Each loaded worktree keeps a `projection.Live` (`Worktree.Projections`) over
+  its `FileStore`. A session is *active* while something holds it
+  (`Source.Hold`, which returns its release): its process, from before its
+  agent starts — the agent reads its plan seed as it starts — until its stream
+  has drained, since an exiting process still writes history
+  (`process.Manager.GetOrCreateProcess`); and its chat subscribers, from the
+  first to subscribe until the last leaves (`ChatMessagesWatcher`). Holds are
+  counted, so the process and a viewer, or two processes overlapping across a
+  replacement, keep one projection. A held session is folded from the file the
+  first time its `State` is asked for, and from then on each record is folded
+  as it is appended; the last release lets it go. A read of a session nobody
+  holds folds the file and keeps nothing, as `FromReader` does — that is the
+  re-fold after release, and the price of an idle session's rare read (a
+  refusal's wording, say).
+
+  The bound is the point: an item keeps its call's whole input and its newest
+  result's text, which the client is to be served from, so a projection weighs
+  about what its history does. Measured over 1,554 real histories (393 MB),
+  the fold's heap came to 0.98× the file: 152 KB at the median, 579 KB at p90,
+  4.6 MB at the largest. Kept for every session ever read, as it first was,
+  that is a worktree's whole history in memory, growing for as long as the
+  server runs; kept for active sessions, even the largest costs about 1% of
+  the CLI process that makes it active (a Claude CLI runs at 370–410 MB
+  resident), the median about 0.04%, so there is no further cap, LRU or
+  otherwise. Nothing is trimmed from items to save memory.
+
+  The store reports every write to a `session.HistoryObserver` under the
+  session's history lock, after the write reached the file and before
+  `AppendToHistory` returns — so the fold takes records in file order with no
+  lock of its own shared with the store, and a `State` read after an append
+  returned has that record. The first read of a held session puts its entry in
+  place *before* reading the file, which leaves a record either in what the
+  read finds or reported to the entry afterwards; one that is both is told
+  apart by its seq. A last release racing that read drops the entry being
+  loaded: the read returns what it loaded, keeps nothing, and a hold taken
+  meanwhile reads the file afresh. `Live`'s map lock is never held while a
+  fold lock is taken, so neither the observer (under the store's lock) nor a
+  holder (under the process manager's or the watcher's) waits behind a fold.
+  Hooking the store rather than the `Sequencer` is deliberate: the store is the
+  one place every write passes, the fork's `WriteHistory` included. A held
+  projection is also let go when its history stops being the one it describes
+  — the session deleted, its history replaced by `WriteHistory`, its id
+  created again after a deletion, an append that may or may not have reached
+  the file (`HistoryReset`) — and with the store; the next read folds the file
+  again. A first read that raced a deletion — it found the session, then
+  loaded the file after the reset — lets go of its entry once it sees the
+  session unlisted, and the re-creation reset covers the case where the id is
+  listed again by then. A session whose agent type changed since its fold is
+  folded again, since legacy lines' turns are inferred by agent type. Nothing
+  is persisted. `State` copies the whole state under the session's entry lock,
+  so it costs O(history) and briefly holds up that session's next append; a
+  reader that grows hot wants an accessor of its own on `Live` rather than
+  more `State` calls.
+- **Read-only views fold on each read.** `projection.FromReader` over a
+  `session.DirReader` folds the file every call and keeps nothing — for the
+  reason `DirReader` keeps no cache. Both it and `Live` are a
+  `projection.Source`. No reader of an unloaded worktree uses it yet; it is
+  there so that one moving off the file serves both kinds of worktree, as
+  `session.Reader` does. It reads the history as the file has it: a run
+  that ended unseen has no `process_ended` until a server holding the worktree
+  repairs it ([Restart Repair](#restart-repair)), so its turn reads open here
+  while `DirReader.List` — which normalizes the stored turn state
+  (`NormalizeTurn`) — reads it closed.
 
 ### The Session Index
 

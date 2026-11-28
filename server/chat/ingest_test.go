@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -205,7 +206,7 @@ func TestClient_NoReadPointForAMessageThatWasNotRecorded(t *testing.T) {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	client := NewClient(store, pm)
+	client := NewClient(store, projection.FromReader(store), pm)
 	for _, text := range []string{"first", "second"} {
 		if _, err := client.SendMessageExcluding(context.Background(), "sess", text, nil, nil); err != nil {
 			t.Fatalf("SendMessageExcluding(%q) = %v, want the prompt to go through anyway", text, err)

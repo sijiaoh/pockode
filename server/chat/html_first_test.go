@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -41,7 +42,7 @@ func TestClient_SwitchBeforeFirstMessageIsHonoured(t *testing.T) {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	if _, err := NewClient(store, pm).SendMessageExcluding(context.Background(), "sess", "hello", nil, nil); err != nil {
+	if _, err := NewClient(store, projection.FromReader(store), pm).SendMessageExcluding(context.Background(), "sess", "hello", nil, nil); err != nil {
 		t.Fatalf("SendMessageExcluding: %v", err)
 	}
 

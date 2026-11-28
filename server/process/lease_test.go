@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -36,7 +37,7 @@ func startedTurn(t *testing.T, budgets session.LeaseBudgets) (*Manager, *mockAge
 	t.Helper()
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, budgets)
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), budgets)
 	t.Cleanup(m.Shutdown)
 
 	proc, _, err := m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))

@@ -14,6 +14,7 @@ import (
 	"github.com/pockode/server/chatstream"
 	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -85,7 +86,10 @@ var ErrForkUnsupported = errors.New("this session's agent does not support forki
 // It is the single entry point for programmatic chat interactions.
 type Client struct {
 	store session.Store
-	pm    *process.Manager
+	// projections is what store's histories say (projection.Live), which is
+	// where what became of a question is read.
+	projections projection.Source
+	pm          *process.Manager
 	// stream is the process manager's, so what this client writes and what
 	// the session's process writes take their places in one order.
 	stream  *chatstream.Sequencer
@@ -94,8 +98,8 @@ type Client struct {
 	postMu sync.Mutex
 }
 
-func NewClient(store session.Store, pm *process.Manager) *Client {
-	return &Client{store: store, pm: pm, stream: pm.Stream()}
+func NewClient(store session.Store, projections projection.Source, pm *process.Manager) *Client {
+	return &Client{store: store, projections: projections, pm: pm, stream: pm.Stream()}
 }
 
 // QuestionsSettledFunc is told when posted questions stop waiting in a session,
@@ -531,6 +535,9 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 	}
 
 	history := agent.TruncateHistory(records, keepThrough)
+	// The fork's state at the cut is the fold of the copy alone — not the
+	// source's projection, which has gone on past it.
+	atCut := projection.Fold(history, source.AgentType).State()
 
 	newID := uuid.Must(uuid.NewV7()).String()
 	meta, err := c.store.CreateFork(ctx, newID, session.ForkSpec{
@@ -542,8 +549,8 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 		Activated: agent.HistoryActivatesSession(history),
 		// Read out of the copied records, not off the source's live list: what
 		// the fork inherits is what was unanswered *at the cut*, and the source
-		// may have answered three of them since. See agent.UnansweredQuestions.
-		Unanswered: agent.UnansweredQuestions(history),
+		// may have answered three of them since.
+		Unanswered: atCut.Unanswered(),
 		// Only the pages the cut keeps a record of: one drawn past it is not
 		// in the fork's transcript (htmlpage.Clone says why its number is
 		// still not reused).
@@ -573,7 +580,7 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 	// process stopped carrying it — process_ended, in no turn — so the two
 	// agree, and every reader of the copy sees the turn end where it was cut,
 	// aborted rather than finished.
-	if agent.OpenTurnOf(agent.InferHistoryTurns(history, source.AgentType)) != "" {
+	if atCut.OpenTurn() != "" {
 		if _, err := c.stream.AppendTo(ctx, newID, agent.ProcessEndedRecord{}, session.NoTurn); err != nil {
 			return fail(fmt.Errorf("record that the fork carries no turn: %w", err))
 		}

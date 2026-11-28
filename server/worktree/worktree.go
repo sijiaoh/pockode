@@ -10,6 +10,7 @@ import (
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/permreview"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/watch"
 )
@@ -22,8 +23,12 @@ type Worktree struct {
 	// and everything that hangs off a session (history, attachments) lives. The
 	// main worktree's is the server's data dir; a named one gets a directory of
 	// its own under it.
-	DataDir              string
-	SessionStore         session.Store
+	DataDir      string
+	SessionStore session.Store
+	// Projections is what SessionStore's histories say, kept current as they
+	// are written for the sessions a process or a chat subscriber holds
+	// (projection.Live).
+	Projections          *projection.Live
 	FSWatcher            *watch.FSWatcher
 	GitWatcher           *watch.GitWatcher
 	GitDiffWatcher       *watch.GitDiffWatcher

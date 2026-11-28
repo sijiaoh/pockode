@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/work"
 )
@@ -95,7 +96,7 @@ func TestWorkCalls_LeaveEverythingElseUnstamped(t *testing.T) {
 func TestProcess_WorkToolResultIsRecordedWithItsWork(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	m.SetWorkLookup(fakeWorks{"t1": {ID: "t1", StoryID: "s1", Title: "Design the row"}})
 	defer m.Shutdown()
 

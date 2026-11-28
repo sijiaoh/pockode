@@ -29,61 +29,6 @@ func postedRecord(t *testing.T, id string) json.RawMessage {
 	})
 }
 
-func gotIDs(t *testing.T, records []json.RawMessage) []string {
-	t.Helper()
-	questions := UnansweredQuestions(records)
-	ids := make([]string, len(questions))
-	for i, q := range questions {
-		ids[i] = q.RequestID
-	}
-	return ids
-}
-
-func wantIDs(t *testing.T, got, want []string) {
-	t.Helper()
-	if len(got) != len(want) {
-		t.Fatalf("unanswered = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("unanswered = %v, want %v", got, want)
-		}
-	}
-}
-
-// TestUnansweredQuestions_CarriesTheWholeQuestion: a fork inherits something the
-// user can actually answer, so the options and the header have to survive the
-// round trip through the record.
-func TestUnansweredQuestions_CarriesTheWholeQuestion(t *testing.T) {
-	questions := UnansweredQuestions([]json.RawMessage{postedRecord(t, "req-1")})
-	if len(questions) != 1 {
-		t.Fatalf("questions = %d, want 1", len(questions))
-	}
-	q := questions[0]
-	if q.Header != "Database" || q.Question != "Which database?" {
-		t.Errorf("question = %+v, want the posted text", q)
-	}
-	if len(q.Options) != 2 || q.Options[0].Label != "Postgres" || q.Options[0].Description != "the one we have" ||
-		!q.Options[0].Recommended || q.Options[1].Recommended {
-		t.Errorf("options = %+v, want the posted options", q.Options)
-	}
-	if q.AskedAt.IsZero() {
-		t.Error("asked_at is zero, want the moment the question was posted")
-	}
-}
-
-// TestUnansweredQuestions_ReadsARecordFromBeforeRecommended: transcripts
-// written before options could be recommended carry no such key, and a fork of
-// one still inherits its questions — with nothing recommended.
-func TestUnansweredQuestions_ReadsARecordFromBeforeRecommended(t *testing.T) {
-	old := json.RawMessage(`{"type":"question_posted","request_id":"req-1","questions":[{"question":"Which?","header":"DB","options":[{"label":"Postgres","description":""}],"multiSelect":false}]}`)
-
-	questions := UnansweredQuestions([]json.RawMessage{old})
-	if len(questions) != 1 || len(questions[0].Options) != 1 || questions[0].Options[0].Recommended {
-		t.Fatalf("questions = %+v, want the old question, nothing recommended", questions)
-	}
-}
-
 // TestRecords_CarryNoEmptyTimestamps: `omitempty` does nothing for a struct, so
 // a plain time.Time on a record would put a zero timestamp on every record of
 // its type that has no moment. Every event with a moment of its own, left
@@ -106,80 +51,6 @@ func TestRecords_CarryNoEmptyTimestamps(t *testing.T) {
 	}
 }
 
-// TestUnansweredQuestions_ResolutionsInTheCopiedHistory is what makes fork
-// inheritance right: what crosses is what was open *at the cut*, and each of the
-// three ways a question leaves the list has to be read out of the records.
-func TestUnansweredQuestions_ResolutionsInTheCopiedHistory(t *testing.T) {
-	tests := []struct {
-		name       string
-		resolution json.RawMessage
-	}{
-		{"answered", nil},
-		{"declined", nil},
-		{"withdrawn", nil},
-	}
-	tests[0].resolution = recordJSON(t, MessageEvent{
-		Content:   "Answering: Postgres",
-		Answering: []QuestionAnswer{{RequestID: "req-1", Answers: []string{"Postgres"}}},
-	})
-	tests[1].resolution = recordJSON(t, MessageEvent{
-		Content:   "Answering: not answering",
-		Answering: []QuestionAnswer{{RequestID: "req-1", Declined: true}},
-	})
-	tests[2].resolution = recordJSON(t, RequestCancelledEvent{RequestID: "req-1"})
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			records := []json.RawMessage{postedRecord(t, "req-1"), postedRecord(t, "req-2"), tt.resolution}
-			wantIDs(t, gotIDs(t, records), []string{"req-2"})
-		})
-	}
-}
-
-// TestUnansweredQuestions_ADiscardedAnswerIsNoAnswer: a fork cut after a Stop
-// threw away an answer unread inherits the question as the source had it then —
-// open again — and one answered afresh after that stays answered.
-func TestUnansweredQuestions_ADiscardedAnswerIsNoAnswer(t *testing.T) {
-	answer := func(messageID string) json.RawMessage {
-		return recordJSON(t, MessageEvent{
-			MessageID: messageID,
-			Content:   "Answering: Postgres",
-			Answering: []QuestionAnswer{{RequestID: "req-1", Answers: []string{"Postgres"}}},
-		})
-	}
-	discarded := recordJSON(t, MessageDiscardedEvent{MessageID: "msg-a"})
-
-	records := []json.RawMessage{postedRecord(t, "req-1"), postedRecord(t, "req-2"), answer("msg-a"), discarded}
-	wantIDs(t, gotIDs(t, records), []string{"req-2", "req-1"})
-	if q := UnansweredQuestions(records)[1]; q.Header != "Database" || len(q.Options) != 2 {
-		t.Errorf("reopened question = %+v, want it whole", q)
-	}
-
-	wantIDs(t, gotIDs(t, append(records, answer("msg-b"))), []string{"req-2"})
-}
-
-// TestUnansweredQuestions_OnlyWhatTheRecordsSay: a resolution that fell past the
-// cut is not in the copied records, so the question is still open in the fork —
-// which is the point. This is the case that a live read of the source's state
-// would get wrong.
-func TestUnansweredQuestions_OnlyWhatTheRecordsSay(t *testing.T) {
-	kept := []json.RawMessage{postedRecord(t, "req-1")}
-	wantIDs(t, gotIDs(t, kept), []string{"req-1"})
-}
-
-// TestUnansweredQuestions_IgnoresWhatItCannotUse: an ordinary message, an
-// unparseable line, and a record naming no question all leave the list alone.
-func TestUnansweredQuestions_IgnoresWhatItCannotUse(t *testing.T) {
-	records := []json.RawMessage{
-		json.RawMessage("not json at all"),
-		recordJSON(t, MessageEvent{Content: "hello"}),
-		recordJSON(t, QuestionPostedEvent{RequestID: "", Question: AskUserQuestion{Question: "?"}}),
-		recordJSON(t, RequestCancelledEvent{RequestID: "never-asked"}),
-		postedRecord(t, "req-1"),
-	}
-	wantIDs(t, gotIDs(t, records), []string{"req-1"})
-}
-
 // TestTruncateHistory_KeepsAnUnansweredPostedQuestion: the cut drops a CLI
 // prompt whose answer fell past it, because only the process that raised it
 // could have taken that answer. A posted question is the opposite case — the
@@ -190,8 +61,7 @@ func TestTruncateHistory_KeepsAnUnansweredPostedQuestion(t *testing.T) {
 		postedRecord(t, "req-1"),
 	}
 	kept := TruncateHistory(records, len(records)-1)
-	if len(kept) != 2 {
-		t.Fatalf("kept %d records, want the posted question kept", len(kept))
+	if len(kept) != 2 || string(kept[1]) != string(records[1]) {
+		t.Fatalf("kept %s, want the posted question kept", kept)
 	}
-	wantIDs(t, gotIDs(t, kept), []string{"req-1"})
 }
