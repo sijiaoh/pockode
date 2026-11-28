@@ -13,6 +13,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -69,7 +70,7 @@ func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.Record) fork
 	} else {
 		registry.Register(session.AgentTypeClaude, &mockAgent{})
 	}
-	pm := process.NewManager(registry, "", t.TempDir(), t.TempDir(), "", store, session.LeaseBudgets{Idle: time.Minute})
+	pm := process.NewManager(registry, "", t.TempDir(), t.TempDir(), "", store, projection.FromReader(store), session.LeaseBudgets{Idle: time.Minute})
 	t.Cleanup(pm.Shutdown)
 
 	ctx := context.Background()
@@ -96,7 +97,7 @@ func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.Record) fork
 		seqs = append(seqs, seq)
 	}
 
-	return forkFixture{store: store, client: NewClient(store, pm), seqs: seqs, dataDir: dataDir}
+	return forkFixture{store: store, client: NewClient(store, projection.FromReader(store), pm), seqs: seqs, dataDir: dataDir}
 }
 
 func forkedHistory(t *testing.T, store session.Store, sessionID string) []agent.Record {
@@ -755,7 +756,7 @@ func TestFork_ACutTurnEndsWithTheFork(t *testing.T) {
 					t.Errorf("process_ended tagged %+v, want no turn", turn)
 				}
 			}
-			if open := agent.OpenTurnOf(agent.InferHistoryTurns(records, session.AgentTypeClaude)); open != "" {
+			if open := projection.Fold(records, session.AgentTypeClaude).State().OpenTurn(); open != "" {
 				t.Errorf("fork's history leaves turn %q open; its turn state is idle", open)
 			}
 		})

@@ -292,7 +292,7 @@ func (s TurnSignal) IsContent() bool {
 // endings the agent reports, and the two ways the process carrying the turn
 // stops carrying it. ReduceTurn is the rule; this is it stated for a reader of
 // a history, which sees an ending as a record and cannot ask the reducer
-// (agent.OpenTurnOf). TestEndsTurnIsWhatReduceTurnEndsOn holds the two
+// (projection.State.OpenTurn). TestEndsTurnIsWhatReduceTurnEndsOn holds the two
 // together.
 func (s TurnSignal) EndsTurn() bool {
 	switch s {
@@ -498,7 +498,7 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 		// the same call — and a second ending reads downstream as a second stop.
 		ended = state.Open
 		if ended {
-			next.LastOutcome = outcomeFor(in.Signal)
+			next.LastOutcome = in.Signal.Outcome()
 		}
 
 	case SignalQuestionPosted:
@@ -611,8 +611,10 @@ func phaseFor(open bool, blockers []Blocker) TurnPhase {
 	}
 }
 
-func outcomeFor(signal TurnSignal) TurnOutcome {
-	switch signal {
+// Outcome is how a turn this signal ends has ended; meaningful only for the
+// signals that end one (EndsTurn), and aborted for both of the process's.
+func (s TurnSignal) Outcome() TurnOutcome {
+	switch s {
 	case SignalDone:
 		return OutcomeCompleted
 	case SignalFailed:

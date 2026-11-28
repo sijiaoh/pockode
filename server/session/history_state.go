@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 )
@@ -69,4 +70,47 @@ func (h *sessionHistory) checkNotDeletedLocked(sessionID string) error {
 		return fmt.Errorf("%w: %s was deleted", ErrSessionNotFound, sessionID)
 	}
 	return nil
+}
+
+// HistoryObserver is told of every change this store makes to a session's
+// history, in the order the file takes them: each call is made under the
+// session's history lock, after the write it reports has reached the file. It
+// is how a reader keeps something derived from a history current without
+// re-reading it (projection.Live), and why it cannot fall behind or ahead of the
+// file: a record is reported before AppendToHistory returns, so whoever learns
+// of a record from its writer finds it reported too.
+//
+// It must not call back into the store, and should be quick: it runs inside
+// the write, and the session's next write waits for it.
+type HistoryObserver interface {
+	// HistoryAppended reports that line — the record as stored, envelope
+	// included — was appended under seq.
+	HistoryAppended(sessionID string, seq HistorySeq, line json.RawMessage)
+	// HistoryReset reports that the history is no longer the one the appends
+	// so far describe: it was replaced (WriteHistory), deleted, created again
+	// under a deleted session's id, or an append failed in a way that may or
+	// may not have reached the file. Whatever was derived from it has to be
+	// read again from the file.
+	HistoryReset(sessionID string)
+}
+
+// SetHistoryObserver names who is told of history writes. Set it before the
+// store is shared: appends read it without a lock. The store's own repair on
+// load (abortTurnsTheLastRunLeftOpen) happens before it can be set, which is
+// fine for an observer that reads a history off the file the first time it
+// needs it.
+func (s *FileStore) SetHistoryObserver(o HistoryObserver) {
+	s.historyObserver = o
+}
+
+func (s *FileStore) historyAppended(sessionID string, seq HistorySeq, line []byte) {
+	if s.historyObserver != nil {
+		s.historyObserver.HistoryAppended(sessionID, seq, line)
+	}
+}
+
+func (s *FileStore) historyReset(sessionID string) {
+	if s.historyObserver != nil {
+		s.historyObserver.HistoryReset(sessionID)
+	}
 }

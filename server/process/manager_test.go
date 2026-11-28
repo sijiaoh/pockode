@@ -15,6 +15,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/cliprofile"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -330,7 +331,7 @@ func TestProcess_OutOfTurnEventsKeepProcessIdle(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store, _ := session.NewFileStore(t.TempDir())
 			mock := &mockAgent{}
-			m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+			m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 			defer m.Shutdown()
 
 			rec := &stateRecorder{}
@@ -520,7 +521,7 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store, _ := session.NewFileStore(t.TempDir())
 			mock := &mockAgent{}
-			m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+			m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 			defer m.Shutdown()
 
 			rec := &stateRecorder{}
@@ -578,7 +579,7 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 func TestProcess_OnlyContentEndsABackgroundWait(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -635,7 +636,7 @@ func TestTurnInputFor_BackgroundSettlementIsNotOutput(t *testing.T) {
 func TestProcess_ConsecutiveTurns(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	rec := &stateRecorder{}
@@ -692,7 +693,7 @@ func TestProcess_ConsecutiveTurns(t *testing.T) {
 func TestManager_GetOrCreateProcess_NewSession(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	proc, created, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -723,7 +724,7 @@ func TestManager_GetOrCreateProcess_NewSession(t *testing.T) {
 func TestManager_ForwardsSeparateDataAndMCPDirs(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "/data/worktrees/feature-x", "/data", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "/data/worktrees/feature-x", "/data", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	if _, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1")); err != nil {
@@ -746,7 +747,7 @@ func TestManager_ForwardsSeparateDataAndMCPDirs(t *testing.T) {
 func TestManager_ForwardsWorktreeName(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "feature-x", "/tmp", "/data/worktrees/feature-x", "/data", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "feature-x", "/tmp", "/data/worktrees/feature-x", "/data", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	if _, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1")); err != nil {
@@ -760,7 +761,7 @@ func TestManager_ForwardsWorktreeName(t *testing.T) {
 func TestManager_GetOrCreateProcess_ExistingSession(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	proc1, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -803,7 +804,7 @@ const awaitTimeout = 10 * time.Second
 func TestManager_LeaseReaper(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 	defer m.Shutdown()
 
 	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -826,7 +827,7 @@ func TestManager_LeaseReaper(t *testing.T) {
 func TestManager_LeaseReaper_ZeroBudgetsTurnReapingOff(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(0))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(0))
 	defer m.Shutdown()
 
 	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -884,7 +885,7 @@ func (b *lockedBuffer) String() string {
 func TestManager_LeaseReaper_SparesABackgroundWait(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 	defer m.Shutdown()
 
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -915,7 +916,7 @@ func TestManager_LeaseReaper_SparesABackgroundWait(t *testing.T) {
 func TestManager_LeaseReaper_EmitsProcessStateEnded(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 	defer m.Shutdown()
 
 	ended := make(chan string, 8)
@@ -944,7 +945,7 @@ func TestManager_LeaseReaper_EmitsProcessStateEnded(t *testing.T) {
 func TestManager_Touch_PreventsReaping(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 	defer m.Shutdown()
 
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -974,7 +975,7 @@ func TestManager_Touch_PreventsReaping(t *testing.T) {
 func TestManager_Shutdown_ClosesAllProcesses(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 
 	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-2"))
@@ -1007,7 +1008,7 @@ func TestManager_Shutdown_ClosesAllProcesses(t *testing.T) {
 func TestManager_Shutdown_WaitsForStreamingToFinish(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 
 	var handled atomic.Bool
 	m.SetOnStateChange(func(e StateChangeEvent) {
@@ -1051,7 +1052,7 @@ func TestManager_Shutdown_PersistsWhatTheStreamDrains(t *testing.T) {
 	dataDir := t.TempDir()
 	store, _ := session.NewFileStore(dataDir)
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 
 	proc, _, err := m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 	if err != nil {
@@ -1107,7 +1108,7 @@ func TestManager_Shutdown_PersistsWhatTheStreamDrains(t *testing.T) {
 func TestManager_GetOrCreateProcess_AfterShutdown(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	m.Shutdown()
 
 	_, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -1122,7 +1123,7 @@ func TestManager_GetOrCreateProcess_AfterShutdown(t *testing.T) {
 func TestManager_Close_SpecificProcess(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -1147,7 +1148,7 @@ func TestManager_Close_SpecificProcess(t *testing.T) {
 func TestManager_HasProcess(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	// No process initially
@@ -1166,7 +1167,7 @@ func TestManager_HasProcess(t *testing.T) {
 func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 	defer m.Shutdown()
 
 	// streamEvents emits to the listener after touching the process, so the
@@ -1212,7 +1213,7 @@ func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
 func TestProcess_ClosedFlagSuppressesStateChanges(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	rec := &stateRecorder{}
@@ -1245,7 +1246,7 @@ func TestProcess_ClosedFlagSuppressesStateChanges(t *testing.T) {
 func TestProcess_EmitsOnlyRealTurnChanges(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	rec := &stateRecorder{}
@@ -1302,7 +1303,7 @@ func TestProcess_EmitsOnlyRealTurnChanges(t *testing.T) {
 func TestProcess_InterruptEndsTheTurnAsAborted(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	rec := &stateRecorder{}
@@ -1328,7 +1329,7 @@ func TestProcess_InterruptEndsTheTurnAsAborted(t *testing.T) {
 func TestProcess_SendMessage_StartsTheTurn(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	var events []StateChangeEvent
@@ -1380,7 +1381,7 @@ func TestProcess_ActivationFollowsAgentOutput(t *testing.T) {
 	}
 
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	if _, _, err := m.GetOrCreateProcess(ctx, createSession(t, store, "sess-1")); err != nil {
@@ -1425,7 +1426,7 @@ func TestForkAgentSession_AgentThatCannotFork(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	registry := agent.NewRegistry()
 	registry.Register(session.AgentTypeClaude, &mockAgent{})
-	m := NewManager(registry, "", t.TempDir(), t.TempDir(), "", store, session.LeaseBudgets{Idle: time.Minute})
+	m := NewManager(registry, "", t.TempDir(), t.TempDir(), "", store, projection.FromReader(store), session.LeaseBudgets{Idle: time.Minute})
 	defer m.Shutdown()
 
 	carried, err := m.ForkAgentSession(context.Background(), session.AgentTypeClaude, agent.ForkOptions{})
@@ -1446,7 +1447,7 @@ func TestForkAgentSession_AgentThatCannotFork(t *testing.T) {
 func TestManager_LeaseReaper_SparesATurnInProgress(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 	defer m.Shutdown()
 
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -1489,7 +1490,7 @@ func TestManager_LeaseReaper_SparesAnUnansweredPrompt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			store, _ := session.NewFileStore(t.TempDir())
 			mock := &mockAgent{}
-			m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+			m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 			defer m.Shutdown()
 
 			proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -1580,7 +1581,7 @@ func TestManager_LeaseReaper_DropsThePromptHoldWhenNobodyCanAnswer(t *testing.T)
 		t.Run(name, func(t *testing.T) {
 			store, _ := session.NewFileStore(t.TempDir())
 			mock := &mockAgent{}
-			m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+			m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 			defer m.Shutdown()
 
 			proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -1609,7 +1610,7 @@ func TestManager_LeaseReaper_DropsThePromptHoldWhenNobodyCanAnswer(t *testing.T)
 func TestManager_LeaseReaper_SparesAPromptRaisedWhileAlreadyPaused(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 	defer m.Shutdown()
 
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -1647,7 +1648,7 @@ func TestManager_LeaseReaper_SparesAPromptRaisedWhileAlreadyPaused(t *testing.T)
 func TestManager_LeaseReaper_SparesAPromptRaisedAfterTheTurnEnded(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(testIdleTimeout))
 	defer m.Shutdown()
 
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -1698,7 +1699,7 @@ func TestManager_AgentProcessCount(t *testing.T) {
 	slow := slowStartAgent{mockAgent: &mockAgent{}, entered: make(chan struct{}), release: make(chan struct{})}
 	registry := agent.NewRegistry()
 	registry.Register(session.AgentTypeClaude, slow)
-	m := NewManager(registry, "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(registry, "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 	// Deferred after Shutdown so it runs first: a test that fails while the
 	// start is held must not leave Shutdown waiting on it.
@@ -1840,4 +1841,85 @@ func TestProcess_StragglersAreRecordedUnderTheTurnThatEnded(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("history = %+v\nwant      %+v", got, want)
 	}
+}
+
+// countingSource is a Source that counts the holds outstanding per session.
+type countingSource struct {
+	projection.Source
+	heldMu sync.Mutex
+	held   map[string]int
+}
+
+func (s *countingSource) Hold(sessionID string) func() {
+	s.heldMu.Lock()
+	defer s.heldMu.Unlock()
+	s.held[sessionID]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.heldMu.Lock()
+			defer s.heldMu.Unlock()
+			s.held[sessionID]--
+		})
+	}
+}
+
+func (s *countingSource) count(sessionID string) int {
+	s.heldMu.Lock()
+	defer s.heldMu.Unlock()
+	return s.held[sessionID]
+}
+
+// A process holds its session's projection from before its agent starts —
+// the agent reads its plan seed as it starts — until its stream has drained,
+// since an exiting process is still writing history; a start that fails
+// leaves nothing held.
+func TestManager_HoldsTheProjectionForTheProcessLifetime(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	source := &countingSource{Source: projection.FromReader(store), held: make(map[string]int)}
+	heldAtStart := -1
+	failStart := true
+	mock := &mockAgent{exitGate: make(chan struct{}), startErr: func(opts agent.StartOptions) error {
+		heldAtStart = source.count(opts.SessionID)
+		if failStart {
+			return errors.New("refused")
+		}
+		return nil
+	}}
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, source, idleOnly(10*time.Minute))
+	defer m.Shutdown()
+	var openGate sync.Once
+	letExit := func() { openGate.Do(func() { close(mock.exitGate) }) }
+	defer letExit() // before Shutdown, which waits for the exit
+	meta := createSession(t, store, "sess")
+
+	if _, _, err := m.GetOrCreateProcess(context.Background(), meta); err == nil {
+		t.Fatal("start should have failed")
+	}
+	if got := source.count("sess"); got != 0 {
+		t.Fatalf("after a failed start: %d holds, want 0", got)
+	}
+
+	failStart = false
+	proc, _, err := m.GetOrCreateProcess(context.Background(), meta)
+	if err != nil {
+		t.Fatalf("GetOrCreateProcess: %v", err)
+	}
+	if heldAtStart != 1 {
+		t.Fatalf("while the agent starts: %d holds, want 1", heldAtStart)
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		m.Close("sess")
+		close(closed)
+	}()
+	waitFor(t, func() bool { return m.GetProcess("sess") == nil })
+	if got := source.count("sess"); got != 1 {
+		t.Fatalf("out of the map but still draining: %d holds, want 1", got)
+	}
+	letExit()
+	<-closed
+	<-proc.done
+	waitFor(t, func() bool { return source.count("sess") == 0 })
 }

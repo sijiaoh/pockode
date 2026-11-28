@@ -13,6 +13,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/cliprofile"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -38,7 +39,7 @@ func (m *mockAgent) startCount() int {
 func TestManager_StartsAsTheCurrentProfile(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{profile: "A"}
-	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 	defer m.Shutdown()
 
 	proc, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -59,7 +60,7 @@ func TestManager_StartsAsTheCurrentProfile(t *testing.T) {
 func TestManager_ReplacesAnIdleProcessOnAnotherProfile(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{profile: "A"}
-	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 	defer m.Shutdown()
 	ctx := context.Background()
 
@@ -118,7 +119,7 @@ func TestManager_KeepsAProcessMidTurnOnAnotherProfile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store, _ := session.NewFileStore(t.TempDir())
 			mock := &mockAgent{profile: "A"}
-			m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+			m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 			defer m.Shutdown()
 			ctx := context.Background()
 
@@ -151,7 +152,7 @@ func TestManager_KeepsAProcessMidTurnOnAnotherProfile(t *testing.T) {
 func TestManager_ReplacesAfterTheTurnIsOver(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{profile: "A"}
-	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 	defer m.Shutdown()
 	ctx := context.Background()
 
@@ -189,7 +190,7 @@ func TestManager_OneCLIAtATimeWhileReplacing(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	gate := make(chan struct{})
 	mock := &mockAgent{profile: "A", exitGate: gate}
-	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 	defer m.Shutdown()
 	defer func() {
 		select {
@@ -251,7 +252,7 @@ func TestManager_OneCLIAtATimeWhileReplacing(t *testing.T) {
 func TestManager_CurrentProfileUnreadable(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{profileErr: errors.New("disk on fire")}
-	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 	defer m.Shutdown()
 
 	if _, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1")); err == nil {
@@ -269,7 +270,7 @@ func TestManager_CurrentProfileUnreadable(t *testing.T) {
 func TestManager_ReleaseProfile(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{profile: "A"}
-	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 	defer m.Shutdown()
 	ctx := context.Background()
 
@@ -324,7 +325,7 @@ func TestManager_ReleaseProfileWaitsForTheCLI(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	gate := make(chan struct{})
 	mock := &mockAgent{profile: "A", exitGate: gate}
-	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 	defer m.Shutdown()
 
 	exited := sync.OnceFunc(func() { close(gate) })
@@ -364,7 +365,7 @@ func TestManager_StartsAsTheProfileCurrentAtTheStart(t *testing.T) {
 	mock.afterProfileRead = func() {
 		mock.setProfile("B")
 	}
-	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 	defer m.Shutdown()
 
 	proc, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -389,7 +390,7 @@ func TestManager_StartsAsTheDefaultWhenTheProfileWasRemovedMeanwhile(t *testing.
 		mock.profile = "" // Start holds mock.mu.
 		return fmt.Errorf("prepare the claude profile A: %w", cliprofile.ErrNotFound)
 	}
-	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 	defer m.Shutdown()
 
 	proc, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
@@ -408,7 +409,7 @@ func TestManager_ReleaseProfileWaitsForAProcessAlreadyClosing(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	gate := make(chan struct{})
 	mock := &mockAgent{profile: "A", exitGate: gate}
-	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 	defer m.Shutdown()
 	exited := sync.OnceFunc(func() { close(gate) })
 	defer exited()
@@ -438,7 +439,7 @@ func TestManager_ReleaseProfileWaitsForAProcessAlreadyClosing(t *testing.T) {
 func TestManager_ReleaseProfileRefusesTheCurrentOne(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{profile: "A"}
-	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 	defer m.Shutdown()
 
 	if _, _, err := m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1")); err != nil {
@@ -472,7 +473,7 @@ func TestProcess_RecordsTheAccountOnAuthAndLimitRecords(t *testing.T) {
 		t.Run("profile "+strconv.Quote(profile), func(t *testing.T) {
 			store, _ := session.NewFileStore(t.TempDir())
 			mock := &mockAgent{profile: profile}
-			m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+			m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, projection.FromReader(store), idleOnly(time.Minute))
 			defer m.Shutdown()
 
 			proc, _, err := m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))

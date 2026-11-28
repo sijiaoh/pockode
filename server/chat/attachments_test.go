@@ -11,6 +11,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/attachments"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -123,7 +124,7 @@ func TestClient_SendWithAttachments(t *testing.T) {
 		if _, err := store.Create(context.Background(), "sess", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
 			t.Fatal(err)
 		}
-		return NewClient(store, pm), store, ag
+		return NewClient(store, projection.FromReader(store), pm), store, ag
 	}
 
 	t.Run("delivered to the agent and described in the record", func(t *testing.T) {

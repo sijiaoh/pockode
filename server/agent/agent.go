@@ -220,7 +220,7 @@ type StartOptions struct {
 	// the two.
 	Profile cliprofile.Selector
 	// PlanSeed reads the steps of the session's newest main-thread plan record
-	// that the Claude adapter's fold of its Task tools wrote (LatestPlanSeed),
+	// that the Claude adapter's fold of its Task tools wrote (projection.State.PlanSeed),
 	// nil when there is none. The CLI keeps its task list across a restart and
 	// the fold is memory, so a process that resumes the CLI's session starts
 	// its fold from here; otherwise the first TaskUpdate after a restart would

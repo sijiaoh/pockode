@@ -202,7 +202,7 @@ func danglesAfterCut(rec Record, index int, settledTools map[string]int, settled
 		// process that raised it, so one left open by the cut is a call nobody
 		// can ever return; a posted question belongs to the session, so one left
 		// open by the cut is a question the fork inherits and can still answer
-		// (see UnansweredQuestions).
+		// (projection.State.Unanswered).
 		return false
 	}
 }

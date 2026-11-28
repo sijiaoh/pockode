@@ -8,6 +8,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -36,7 +37,7 @@ func newMidTurnFixture(t *testing.T) *midTurnFixture {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	f := &midTurnFixture{store: store, client: NewClient(store, pm), agent: ag, stream: recordStream(pm), pm: pm}
+	f := &midTurnFixture{store: store, client: NewClient(store, projection.FromReader(store), pm), agent: ag, stream: recordStream(pm), pm: pm}
 	return f
 }
 

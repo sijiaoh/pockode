@@ -10,6 +10,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chatstream"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -217,7 +218,7 @@ func newTestManagerWithAgent(t *testing.T, store session.Store) (*process.Manage
 	ag := &mockAgent{}
 	registry := agent.NewRegistry()
 	registry.Register(session.AgentTypeClaude, ag)
-	return process.NewManager(registry, "", t.TempDir(), "", "", store, session.LeaseBudgets{Idle: time.Minute}), ag
+	return process.NewManager(registry, "", t.TempDir(), "", "", store, projection.FromReader(store), session.LeaseBudgets{Idle: time.Minute}), ag
 }
 
 // TestClient_RequestsNeedingLiveProcess covers what happens to a prompt whose
@@ -265,7 +266,7 @@ func TestClient_RequestsNeedingLiveProcess(t *testing.T) {
 				t.Fatalf("Create session: %v", err)
 			}
 
-			if err := tt.call(NewClient(store, pm)); !errors.Is(err, tt.want) {
+			if err := tt.call(NewClient(store, projection.FromReader(store), pm)); !errors.Is(err, tt.want) {
 				t.Errorf("error = %v, want %v", err, tt.want)
 			}
 			if pm.HasProcess("sess") {
@@ -285,7 +286,7 @@ func TestClient_UnknownSessionStaysNotFound(t *testing.T) {
 	pm := newTestManager(t, store)
 	defer pm.Shutdown()
 
-	err = NewClient(store, pm).Interrupt(context.Background(), "nope")
+	err = NewClient(store, projection.FromReader(store), pm).Interrupt(context.Background(), "nope")
 	if !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("error = %v, want %v", err, ErrSessionNotFound)
 	}
@@ -317,7 +318,7 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	client := NewClient(store, pm)
+	client := NewClient(store, projection.FromReader(store), pm)
 	stream := recordStream(pm)
 
 	sent, err := client.SendMessageExcluding(context.Background(), "sess", "hello", nil, nil)

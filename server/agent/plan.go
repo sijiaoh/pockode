@@ -1,10 +1,5 @@
 package agent
 
-import (
-	"bytes"
-	"encoding/json"
-)
-
 // EventTypePlan is the agent's plan as it stood at one moment; see PlanEvent.
 const EventTypePlan EventType = "plan"
 
@@ -75,33 +70,3 @@ func (e PlanEvent) ToRecord() PlanRecord {
 }
 
 func (e PlanEvent) Encode() Wire { return e.ToRecord() }
-
-// LatestPlanSeed is the StartOptions.PlanSeed a session's history holds: the
-// steps of its newest main-thread plan record, when that record is a snapshot
-// of the Claude adapter's Task-tool fold. Nil otherwise — a session with no
-// plan, or one whose newest plan is a TodoWrite list, which has no task ids to
-// seed a fold with. records is the whole history, oldest first.
-func LatestPlanSeed(records []json.RawMessage) []PlanStep {
-	for i := len(records) - 1; i >= 0; i-- {
-		// Cheap enough to skip decoding every record of a long history; a
-		// record that merely mentions the word is decoded and passed over.
-		if !bytes.Contains(records[i], []byte(`"plan"`)) {
-			continue
-		}
-		rec, err := DecodeRecord(records[i])
-		if err != nil {
-			continue
-		}
-		record, ok := rec.(PlanRecord)
-		if !ok || record.ToolUseID == "" || record.ParentToolUseID != "" {
-			continue
-		}
-		for _, step := range record.Steps {
-			if step.ID == "" {
-				return nil
-			}
-		}
-		return record.Steps
-	}
-	return nil
-}

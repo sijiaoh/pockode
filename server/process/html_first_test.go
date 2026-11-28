@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -14,7 +15,7 @@ import (
 func TestManager_GetOrCreateProcess_StaleMetaKeepsCurrentProcess(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 	ctx := context.Background()
 
@@ -44,7 +45,7 @@ func TestManager_GetOrCreateProcess_StaleMetaKeepsCurrentProcess(t *testing.T) {
 func TestManager_GetOrCreateProcess_ReplacesProcessWithOldValue(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 	ctx := context.Background()
 

@@ -98,19 +98,27 @@ func HistorySeqs(records []json.RawMessage) []HistorySeq {
 	seqs := make([]HistorySeq, len(records))
 	prev := NoHistorySeq
 	for i, raw := range records {
-		stored, ok := storedSeq(raw)
-		switch {
-		case ok && stored == NoHistorySeq:
-			seqs[i] = NoHistorySeq
-			continue
-		case ok && stored > prev:
-			seqs[i] = stored
-		default:
-			seqs[i] = prev + 1
+		seqs[i] = NextHistorySeq(prev, raw)
+		if seqs[i].Valid() {
+			prev = seqs[i]
 		}
-		prev = seqs[i]
 	}
 	return seqs
+}
+
+// NextHistorySeq is the seq HistorySeqs gives raw when the numbered record
+// before it has prev (NoHistorySeq for none): HistorySeqs one record at a time,
+// for a reader that is handed a history as it grows.
+func NextHistorySeq(prev HistorySeq, raw json.RawMessage) HistorySeq {
+	stored, ok := storedSeq(raw)
+	switch {
+	case ok && stored == NoHistorySeq:
+		return NoHistorySeq
+	case ok && stored > prev:
+		return stored
+	default:
+		return prev + 1
+	}
 }
 
 // lastHistorySeq is the seq the newest numbered record has, or NoHistorySeq for

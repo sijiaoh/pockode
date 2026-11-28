@@ -1021,8 +1021,8 @@ but the fold is memory. So a process that resumes the CLI's session **seeds**
 its fold from the session's newest plan record, and the first update after a
 restart carries the earlier tasks with it. The adapter cannot read history, so
 `process.Manager` hands in a reader, `agent.StartOptions.PlanSeed`
-(`func(ctx) []PlanStep`), which `agent.LatestPlanSeed` answers from the
-history:
+(`func(ctx) []PlanStep`), which the session's history projection answers
+(`projection.State.PlanSeed`):
 
 - **Only a plain resume calls it** (`resume && !fork`). The CLI keys its task
   list by its own session id and numbers each list from 1, so a fork, a fresh

@@ -28,7 +28,7 @@ import (
 //
 // One request id can be open in *several* sessions at once, which is why the
 // index maps to a set rather than to one session. A fork copies the questions
-// it inherits with their ids unchanged (agent.UnansweredQuestions), so the
+// it inherits with their ids unchanged (projection.State.Unanswered), so the
 // moment a session with an unanswered question is forked there are two places
 // that id is waiting, and nothing decides which of them is the real one —
 // answering one leaves the other still asking. Keeping only the latest would

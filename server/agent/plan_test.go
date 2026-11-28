@@ -2,7 +2,6 @@ package agent
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
 )
 
@@ -64,48 +63,6 @@ func TestPlanEvent_Record(t *testing.T) {
 			}
 			if string(got) != tt.want {
 				t.Errorf("record = %s\nwant     %s", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestLatestPlanSeed(t *testing.T) {
-	fold := `{"type":"plan","tool_use_id":"toolu_2","steps":[{"id":"1","text":"A","status":"completed"},{"id":"2","text":"B","status":"pending"}],"seq":4}`
-	tests := []struct {
-		name    string
-		records []string
-		want    []PlanStep
-	}{
-		{
-			name: "the newest main-thread fold snapshot",
-			records: []string{
-				`{"type":"plan","tool_use_id":"toolu_1","steps":[{"id":"1","text":"A","status":"pending"}]}`,
-				fold,
-				`{"type":"plan","plan_id":"t:plan:1","parent_tool_use_id":"call_spawn","steps":[{"text":"child","status":"pending"}]}`,
-				`{"type":"text","content":"the plan is done"}`,
-			},
-			want: []PlanStep{{ID: "1", Text: "A", Status: PlanStepCompleted}, {ID: "2", Text: "B", Status: PlanStepPending}},
-		},
-		{
-			// TodoWrite has no ids: there is no fold to seed.
-			name:    "a TodoWrite list",
-			records: []string{fold, `{"type":"plan","tool_use_id":"toolu_3","steps":[{"text":"A","status":"pending"}]}`},
-			want:    nil,
-		},
-		{
-			name:    "no plan",
-			records: []string{`{"type":"text","content":"plan"}`, `{"type":"tool_call","tool_name":"Read"}`},
-			want:    nil,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			records := make([]json.RawMessage, len(tt.records))
-			for i, r := range tt.records {
-				records[i] = json.RawMessage(r)
-			}
-			if got := LatestPlanSeed(records); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("seed = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

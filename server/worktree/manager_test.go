@@ -11,6 +11,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/watch"
 	"github.com/pockode/server/work"
@@ -767,7 +768,7 @@ func TestWorktreeStop_WritesWhatTheSessionStoreHeld(t *testing.T) {
 	}
 	wt := &Worktree{
 		SessionStore:   store,
-		ProcessManager: process.NewManager(agent.NewRegistry(), "", t.TempDir(), dataDir, "", store, session.LeaseBudgets{}),
+		ProcessManager: process.NewManager(agent.NewRegistry(), "", t.TempDir(), dataDir, "", store, projection.FromReader(store), session.LeaseBudgets{}),
 	}
 
 	wt.Stop()

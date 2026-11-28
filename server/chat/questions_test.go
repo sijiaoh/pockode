@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -38,7 +39,7 @@ func newQuestionFixture(t *testing.T) *questionFixture {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	f := &questionFixture{store: store, client: NewClient(store, pm), agent: ag, stream: recordStream(pm)}
+	f := &questionFixture{store: store, client: NewClient(store, projection.FromReader(store), pm), agent: ag, stream: recordStream(pm)}
 	f.client.SetOnQuestionsSettled(func(sessionID string, settled []agent.SettledQuestion) {
 		if sessionID != "sess" {
 			t.Errorf("settled reported for session %q, want sess", sessionID)

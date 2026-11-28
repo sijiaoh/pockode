@@ -155,6 +155,9 @@ type FileStore struct {
 	// countHistory finds the newest seq already in a session's history the
 	// first time it is appended to; a test holds a count in flight through it.
 	countHistory func(sessionID string) (HistorySeq, error)
+	// historyObserver is told of every history write, under the session's
+	// fileMu; nil for none. See SetHistoryObserver.
+	historyObserver HistoryObserver
 
 	// dirty says the index in memory has changes the file does not; flushTimer
 	// is what will write them. Both guarded by writeMu — see persistLocked.
@@ -524,6 +527,9 @@ func (s *FileStore) insertLocked(session SessionMeta) error {
 	h := s.historyState(session.ID)
 	h.fileMu.Lock()
 	h.deleted = false
+	// Anything derived from the deleted session's history — a read that
+	// raced the deletion and loaded the old file — is not this one's.
+	s.historyReset(session.ID)
 	h.fileMu.Unlock()
 
 	s.publishLocked(s.sessions)
@@ -703,6 +709,7 @@ func (s *FileStore) removeSessionDirs(ids []string) error {
 		h.fileMu.Lock()
 		h.deleted = true
 		h.counted = false
+		s.historyReset(id)
 		h.fileMu.Unlock()
 	}
 
@@ -1035,12 +1042,15 @@ func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, recor
 	if err := filestore.AppendJSONL(s.historyPath(sessionID), json.RawMessage(line)); err != nil {
 		// The line may have reached the file anyway (a failed close), and
 		// handing its seq out again would store a duplicate, which renumbers
-		// every later record (HistorySeqs). The next append asks the file.
+		// every later record (HistorySeqs). The next append asks the file, and
+		// so does whoever derived something from the history.
 		h.counted = false
+		s.historyReset(sessionID)
 		return NoHistorySeq, err
 	}
 
 	h.lastSeq = seq
+	s.historyAppended(sessionID, seq, line)
 	return seq, nil
 }
 
@@ -1101,6 +1111,7 @@ func (s *FileStore) WriteHistory(ctx context.Context, sessionID string, records 
 	}
 
 	h.lastSeq, h.counted = HistorySeq(len(records)), true
+	s.historyReset(sessionID)
 	return nil
 }
 

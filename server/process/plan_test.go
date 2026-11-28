@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 )
 
@@ -29,7 +30,7 @@ func TestManager_SeedsThePlanFromHistory(t *testing.T) {
 		seed = opts.PlanSeed
 		return nil
 	}}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	// A session that never started has nothing to read.
@@ -73,7 +74,7 @@ func TestManager_PlanSeedWaitsForThePreviousProcess(t *testing.T) {
 		seed = opts.PlanSeed
 		return nil
 	}}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	meta := createActivatedSession(t, store, "sess-1")
@@ -126,7 +127,7 @@ func TestManager_PlanSeedNeverWaitsForItsOwnProcess(t *testing.T) {
 		seed = opts.PlanSeed
 		return nil
 	}}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 	defer close(gate)
 
@@ -162,7 +163,7 @@ func TestManager_PlanSeedGivesUpOnASlowPreviousProcess(t *testing.T) {
 		seed = opts.PlanSeed
 		return nil
 	}}
-	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, projection.FromReader(store), idleOnly(10*time.Minute))
 	defer m.Shutdown()
 	defer close(gate)
 	m.planSeedWait = 20 * time.Millisecond

@@ -13,6 +13,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/watch"
@@ -63,14 +64,14 @@ func newStarterEnv(t *testing.T, defaults settings.Settings, seed ...agentrole.A
 	agents := agent.NewRegistry()
 	agents.Register(session.AgentTypeClaude, idleAgent{})
 	agents.Register(session.AgentTypeCodex, idleAgent{})
-	pm := process.NewManager(agents, "", t.TempDir(), dataDir, "", sessionStore, session.LeaseBudgets{Idle: time.Minute})
+	pm := process.NewManager(agents, "", t.TempDir(), dataDir, "", sessionStore, projection.FromReader(sessionStore), session.LeaseBudgets{Idle: time.Minute})
 	t.Cleanup(pm.Shutdown)
 
 	wt := &Worktree{
 		WorkDir:        t.TempDir(),
 		SessionStore:   sessionStore,
 		ProcessManager: pm,
-		ChatClient:     chat.NewClient(sessionStore, pm),
+		ChatClient:     chat.NewClient(sessionStore, projection.FromReader(sessionStore), pm),
 		subscribers:    make(map[watch.Notifier]struct{}),
 	}
 
