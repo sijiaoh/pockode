@@ -1601,8 +1601,13 @@ func (p *Process) recordExpiries(ctx context.Context, log *slog.Logger, sig sess
 		if err != nil {
 			// A deleted session is the ordinary case here: its process is torn
 			// down asynchronously, so an expiry can outlive the session it
-			// describes.
-			log.Debug("failed to record an expired request", "requestId", blocker.RequestID, "error", err)
+			// describes, and the store refuses the write rather than recreate
+			// the directory Delete removed.
+			if errors.Is(err, session.ErrSessionNotFound) {
+				log.Debug("expired request not recorded, session is gone", "requestId", blocker.RequestID)
+			} else {
+				log.Error("failed to record an expired request", "requestId", blocker.RequestID, "error", err)
+			}
 			continue
 		}
 		p.manager.EmitMessage(p.sessionID, event, seq)
@@ -2000,7 +2005,12 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 	if eventType.Persisted() {
 		var err error
 		seq, err = p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event))
-		if err != nil {
+		switch {
+		case errors.Is(err, session.ErrSessionNotFound):
+			// As in applyTurn: output still arriving for a session deleted
+			// while its process is torn down.
+			log.Debug("history record dropped, session is gone", "eventType", eventType)
+		case err != nil:
 			log.Error("failed to append to history", "error", err)
 		}
 	}

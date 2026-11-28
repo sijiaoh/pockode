@@ -5100,6 +5100,21 @@ uses `filestore.WriteFileAtomic`. If it is nonetheless found corrupt at startup,
 it is moved to `index.json.corrupt` and the store starts empty rather than
 failing to boot.
 
+**A deleted session takes no more writes.** Deleting a session closes its
+process first and waits for it (`process.Manager.Close`), but that process is not
+the only possible writer: a process already replaced by a newer one still drains its last
+output on its own, and nothing stops a message from starting a new process
+between the close and the delete. Their writes can arrive after the directory is
+gone. Appending creates the directory it writes into, so a late write used to
+bring `sessions/<sessionID>/` back as an orphan that nothing lists. The store therefore remembers, in memory,
+the sessions it deleted, and `AppendToHistory` / `WriteHistory` refuse them with
+`ErrSessionNotFound`, which the process manager logs at debug level: nothing was
+lost, there is no longer a session to lose it from. The memory is cleared when the
+same id is created again (a work restarts its deleted session under its own id),
+and needs no persisting, since a session deleted by an earlier run has no process
+left in this one. The ordering that keeps an in-flight append from slipping
+between the check and the removal is in the comment on `FileStore.historyMu`.
+
 **Naming a record.** A client that needs to point at one record — forking is so
 far the only caller — quotes back a `session.HistorySeq`: the record's 1-based
 position in what `GetHistory` returns. The server hands the number out, on
